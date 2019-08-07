@@ -46,7 +46,6 @@ if __name__ == '__main__':
             glob.glob(os.path.join(args.directory, "{0:s}*.npz".format(args.suffix)))):
         raise IOError("Error: convert files first!")
 
-
     t, v, tin, vin = readgraphpy(args.directory, prefix=args.suffix)
 
     # set the mask for the voltage
@@ -83,6 +82,8 @@ if __name__ == '__main__':
 
     t = t[args.usedchunk][m[args.usedchunk]][sli]
     v = v[args.usedchunk][m[args.usedchunk]][sli]
+
+    print ("Measurement time: {0:.5f} seconds".format(t.max() - t.min()))
 
     # build the trigger windows using derivative
     t0, t_trig, v_trig = build_trigger_windows(t, v, fSample=args.fSample,
@@ -181,12 +182,13 @@ if __name__ == '__main__':
             r = {'fit_ok': False}
 
         if args.control_plots:
-            plt.savefig(os.path.join(args.directory, "fit_pulse_{0:05n}.png".format(i+1)),
+            plt.savefig(os.path.join(args.directory, "fit_pulse_{0:05n}_c{1:n}.png".format(i+1, args.usedchunk)),
                         format='png', dpi=150)
             plt.close("all")
 
         d = dict(result=r, t0=t0[i], parameters=vars(args))
-        np.save(os.path.join(args.directory, 'fit_results_dvdtthr{1:.0f}_{0:05}.npy'.format(i+1,args.dvdt_thr)),d)
+        np.save(os.path.join(args.directory, 'fit_results_dvdtthr{1:.0f}_c{2:n}_{0:05}.npy'.format(
+            i+1,args.dvdt_thr, args.usedchunk)),d)
 
         print ("written results to {0:s}".format(os.path.join(args.directory,
                     'fit_results_dvdtthr{1:.0f}_{0:05}.npy'.format(i+1,args.dvdt_thr))))
