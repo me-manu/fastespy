@@ -7,6 +7,8 @@ import matplotlib
 matplotlib.use("agg")
 import matplotlib.pyplot as plt
 from fastespy.fitting import pvalue
+from fastespy.fitting import TimeLine, FitTimeLine
+from fastespy.readpydata import readgraphpy
 
 
 if __name__ == '__main__':
@@ -15,17 +17,29 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(usage=usage, description=description)
     parser.add_argument('-d', '--directory', required=True, help='Directory with npz data files')
     parser.add_argument('--dvdt_thr', help='Trigger threshold for derivative in mV / micro sec', type=float,
-                        default = 25.)
+                        default = 30.)
+    parser.add_argument('--v_thr', help='Trigger threshold for pulse height in V', type=float,
+                        default = 0.)
+    parser.add_argument('-s', '--suffix', help='suffix for data files', default='tes2')
+    parser.add_argument('-i', '--usedchunk', help='the data chunk to use when mask is applied', default=0, type=int)
     args = parser.parse_args()
 
+    # read the data
+    t, v, tin, vin = readgraphpy(args.directory, prefix=args.suffix)
+    t = t[args.usedchunk]
+    v = v[args.usedchunk]
+
     # find files
-    result_files = glob.glob(os.path.join(
-        args.directory, 'fit_results_dvdtthr{0:.0f}_*.npy'.format(args.dvdt_thr)))
+    suffix = "_dvdtthr{0:.0f}_vthr{1:.0f}_c{2:n}".format(args.dvdt_thr, args.v_thr * 1e3, args.usedchunk)
+    result_files = glob.glob(os.path.join(args.directory,
+        'fit_results{0:s}*.npy'.format(suffix)))
+
     result_files = sorted(result_files, key=lambda f: int(os.path.basename(f).split('.npy')[0][-5:]))
 
     result = dict(tr=[], td=[], t0=[], A=[], c=[])
     err = dict(tr=[], td=[], t0=[], A=[], c=[])
     pval = []
+    vavg = []
 
     # loop through files
     for i, rf in enumerate(result_files):
@@ -51,6 +65,93 @@ if __name__ == '__main__':
                         err[kk] += \
                             [r['result']['error'][k] for k in r['result']['error'].keys() if kk in k]
 
+                # if only one pulse in trigger window, add to average pulse array
+                if len(r['result']['value'].keys()) == 5:
+                    idup = np.round(r['parameters']['stepup'] * 1e-6 * r['parameters']['fSample'], 0).astype(np.int)
+                    idlo = np.round(r['parameters']['steplo'] * 1e-6 * r['parameters']['fSample'], 0).astype(np.int)
+                    idt0 = np.where(t == r['t0'])[0][0]
+                    if idt0-idlo < 0:
+                        idlo = 0
+                    if idt0+idup >= t.size:
+                        idup = 0
+                    vavg.append(v[idt0-idlo: idt0+idup])
+
+    # determine and fit average pulse
+    if len(vavg):
+        vavg = np.array(vavg) * 1e3
+        tavg = np.linspace(0.,vavg.shape[1] / r['parameters']['fSample'] * 1e6, vavg.shape[1])
+
+        fig = plt.figure(figsize = (6, 4))
+        plt.fill_between(tavg, vavg.mean(axis=0) - np.sqrt(vavg.var(axis=0)),
+                         y2=vavg.mean(axis=0) + np.sqrt(vavg.var(axis=0)),
+                         alpha=0.2, color=plt.cm.tab10(0.))
+        plt.plot(tavg,vavg.mean(axis=0), color=plt.cm.tab10(0.), label='average pulse')
+        plt.xlabel("Time ($\mu$s)")
+        plt.ylabel("Voltage (mV)")
+
+        # fit the average pulse
+        ftl = FitTimeLine(t=tavg,
+                          v=vavg.mean(axis=0),
+                          dv=np.sqrt(vavg.var(axis=0)),
+                          fSample=r['parameters']['fSample'])
+        kwargs = {}
+
+        tr, td = 1., 10.
+
+        if r['parameters']['function'] == 'tesresponse':
+            kwargs['pinit'] = dict(
+                tr_000=tr,
+                td_000=td,
+                c=ftl._v[0],
+                A_000=np.abs(np.min(ftl.v))
+            )
+        elif r['parameters']['function'] == 'expflare':
+            kwargs['pinit'] = dict(
+                tr_000=0.5,
+                td_000=7.,
+                c=0.,
+                A_000=np.abs(np.min(ftl.v)) * 0.66
+            )
+
+        kwargs['limits'] = dict(
+            t0_000=[ftl.t.min(), ftl.t.max()],
+            tr_000=[1e-5, 1e2],
+            td_000=[1e-5, 1e2],
+            c=[-100., 100.],
+            A_000=[1e-5, 1e3]
+        )
+
+        try:
+            ravg = ftl.fit(tmin=None,
+                        tmax=None,
+                        function=r['parameters']['function'],
+                        minos=1., parscan='none',
+                        dvdt_thr=-1. * args.dvdt_thr if args.dvdt_thr < 25. else -25.,
+                        **kwargs)
+
+            func = TimeLine(numcomp=ravg['numcomp'], function=r['parameters']['function'])
+
+            plt.plot(tavg, func(tavg, **ravg['fitarg']),
+                        label='fit to average pulse', ls='--', color=plt.cm.tab10(0.1))
+
+            chi2dof = ravg['chi2'] / ravg['dof']
+            string = "$\\chi^2 / \\mathrm{{d.o.f.}} = {0:.2f}$\n" \
+                     "$t_\\mathrm{{rise}} = ({1:.2f} \\pm {2:.2f})\\mu$s\n" \
+                     "$t_\\mathrm{{decay}} = ({3:.2f} \\pm {4:.2f})\\mu$s".format(chi2dof, ravg['value']['tr_000'],
+                                                                             ravg['error']['tr_000'],
+                                                                             ravg['value']['td_000'],
+                                                                             ravg['error']['td_000'])
+
+            leg = plt.legend(title=string, fontsize='small')
+            plt.setp(leg.get_title(), fontsize='small')
+            plt.savefig(os.path.join(args.directory, 'avg_pulse{0:s}.png'.format(suffix)), dpi=150, format='png')
+            plt.close("all")
+
+        except (RuntimeError,ValueError) as e:
+            print("Couldn't fit average pulse, Error message: {0}".format(e))
+            ravg = {'fit_ok': False}
+
+    # plot histograms of single fits
     result = {k: np.array(v) for k, v in result.items()}
     err = {k: np.array(v) for k, v in err.items()}
     pval = np.array(pval)
@@ -106,7 +207,7 @@ if __name__ == '__main__':
 
     plt.suptitle(args.directory)
     plt.subplots_adjust(hspace = 0.25)
-    plt.savefig(os.path.join(args.directory, 'fit_results_plot.png'))
+    plt.savefig(os.path.join(args.directory, 'fit_results_plot{0:s}.png'.format(suffix)))
 
     fig2 = plt.figure()
     ax = fig2.add_subplot(111)
@@ -120,5 +221,5 @@ if __name__ == '__main__':
     ax.set_ylim(bins['td'].min()-1., bins['td'].max()+1.)
     ax.set_xlabel(xlabel['tr'])
     ax.set_ylabel(xlabel['td'])
-    plt.savefig(os.path.join(args.directory, 'tr_vs_td.png'))
+    plt.savefig(os.path.join(args.directory, 'tr_vs_td{0:s}.png'.format(suffix)))
     plt.close("all")

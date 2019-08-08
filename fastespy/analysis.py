@@ -179,7 +179,8 @@ def derivative_filtered(t,v,fSample, fmax = 1.e6, norder = 3):
     dvf = filter(dv, fSample, fmax=fmax, norder=norder)
     return dv, dvf
 
-def build_trigger_windows(t,v,fSample, thr = -50., tstepup=50., tsteplo=10., fmax = 1.e6, norder = 3):
+def build_trigger_windows(t,v,fSample, thr = -50., thr_v = 0.,
+    tstepup=50., tsteplo=10., fmax = 1.e6, norder = 3):
     """
     Build trigger windows from a continuous time line
 
@@ -206,8 +207,9 @@ def build_trigger_windows(t,v,fSample, thr = -50., tstepup=50., tsteplo=10., fma
 
     dv, dvf = derivative_filtered(t, v, fSample, fmax=fmax, norder=norder)
 
-    mtrig = np.where(dvf * 1e3 / 1e6 < thr)[0]  # convert dv to mV / micro s
-    idxs = np.where(np.diff(mtrig) > 1)[0]  # find indeces that are non-consecutive
+    mtrig = np.where((dvf * 1e3 / 1e6 < thr) & (v < thr_v))[0] # convert dv to mV / micro s
+    #idxs = np.where(np.diff(mtrig) > 1)[0]  # find indeces that are non-consecutive
+    idxs = np.where(np.diff(mtrig) > int(tstepup * 1e-6 * fSample))[0]  # find indeces that are larger than window
 
     t0 = []
     t_trig = []

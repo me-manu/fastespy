@@ -22,6 +22,8 @@ if __name__ == '__main__':
                 type=float, default=0.)
     parser.add_argument('--dvdt_thr', help='Trigger threshold for derivative in mV / micro sec', type=float,
                         default = 25.)
+    parser.add_argument('--v_thr', help='Trigger threshold for pulse height in V', type=float,
+                        default = 0.)
     parser.add_argument('--dv', help='Assumed constant readout error in mV', type=float,
                         default = 3.)
     parser.add_argument('--steplo', help='Time in micro s to be included before trigger', type=float,
@@ -36,6 +38,8 @@ if __name__ == '__main__':
                         default = 1)
     parser.add_argument('--filter', help='If True, fit data filtered with low pass', type=int,
                         default = 0)
+    parser.add_argument('--norder', help="Filter order for derivative. If 0, don't use the filter", type=int,
+                        default = 3)
     parser.add_argument('--istart', help='Start at this trigger window', type=int)
     parser.add_argument('--istop', help='Stop this trigger window', type=int)
 
@@ -88,8 +92,9 @@ if __name__ == '__main__':
     # build the trigger windows using derivative
     t0, t_trig, v_trig = build_trigger_windows(t, v, fSample=args.fSample,
                                                thr=-1. * args.dvdt_thr,
+                                               thr_v=-1. * args.v_thr,
                                                tstepup=args.stepup, tsteplo=args.steplo,
-                                               fmax=args.fmax, norder=3)
+                                               fmax=args.fmax, norder=args.norder)
 
     tr = 2.  # initial guess for rise time in micro sec
     td = 4.  # initial guess for decay time in micro sec
@@ -109,7 +114,7 @@ if __name__ == '__main__':
         print("===== Fitting Trigger window {0:n} / {1:n} ===== ".format(i+1, len(t_trig)))
 
         if args.filter:
-            y = filter(v_trig[i], fSample=args.fSample, fmax=1e6, norder=3) * 1e3
+            y = filter(v_trig[i], fSample=args.fSample, fmax=args.fmax, norder=args.norder) * 1e3
         else:
             y = v_trig[i] * 1e3
         dy = np.full(y.size, args.dv)
@@ -187,11 +192,12 @@ if __name__ == '__main__':
             plt.close("all")
 
         d = dict(result=r, t0=t0[i], parameters=vars(args))
-        np.save(os.path.join(args.directory, 'fit_results_dvdtthr{1:.0f}_c{2:n}_{0:05}.npy'.format(
-            i+1,args.dvdt_thr, args.usedchunk)),d)
+        fname = os.path.join(args.directory, 'fit_results_dvdtthr{1:.0f}_vthr{3:.0f}_c{2:n}_{0:05}.npy'.format(
+            i+1,args.dvdt_thr, args.usedchunk, args.v_thr * 1e3))
 
-        print ("written results to {0:s}".format(os.path.join(args.directory,
-                    'fit_results_dvdtthr{1:.0f}_{0:05}.npy'.format(i+1,args.dvdt_thr))))
+        np.save(fname,d)
+
+        print ("written results to {0:s}".format(fname))
 
         del ftl
 
