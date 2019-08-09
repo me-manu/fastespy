@@ -3,13 +3,13 @@ import argparse
 import glob
 import os
 import numpy as np
-import matplotlib
-matplotlib.use("agg")
-import matplotlib.pyplot as plt
 from fastespy.fitting import pvalue
 from fastespy.fitting import TimeLine, FitTimeLine
 from fastespy.readpydata import readgraphpy
-
+from fastespy.plotting import plot_time_line
+import matplotlib
+matplotlib.use("agg")
+import matplotlib.pyplot as plt
 
 if __name__ == '__main__':
     usage = "usage: %(prog)s -d directory"
@@ -43,7 +43,7 @@ if __name__ == '__main__':
 
     # loop through files
     for i, rf in enumerate(result_files):
-        print ("loading file {0:n} / {1:n}".format(i + 1, len(result_files)))
+        print("loading file {0:n} / {1:n}".format(i + 1, len(result_files)))
         r = np.load(rf, allow_pickle=True).flat[0]
         # extract the rise and decay times
         # trigger times, amplitudes, and backgrounds
@@ -53,6 +53,15 @@ if __name__ == '__main__':
         if r['result']['fit_ok']:
             if pvalue(r['result']['dof'], r['result']['chi2']) > 0.05:
                 pval.append(pvalue(r['result']['dof'], r['result']['chi2']))
+
+                idup = np.round(r['parameters']['stepup'] * 1e-6 * r['parameters']['fSample'], 0).astype(np.int)
+                idlo = np.round(r['parameters']['steplo'] * 1e-6 * r['parameters']['fSample'], 0).astype(np.int)
+                idt0 = np.where(t == r['t0'])[0][0]
+                if idt0-idlo < 0:
+                    idlo = 0
+                if idt0+idup >= t.size:
+                    idup = 0
+
                 for kk in result.keys():
                     if kk == 't0':
                         result[kk] += \
@@ -60,34 +69,39 @@ if __name__ == '__main__':
                         err[kk] += \
                             [r['result']['error'][k] + r['t0'] for k in r['result']['error'].keys() if kk in k]
                     else:
-                        result[kk] += \
-                            [r['result']['value'][k] for k in r['result']['value'].keys() if kk in k]
-                        err[kk] += \
-                            [r['result']['error'][k] for k in r['result']['error'].keys() if kk in k]
+                        x = [r['result']['value'][k] for k in r['result']['value'].keys() if kk in k]
+                        dx = [r['result']['error'][k] for k in r['result']['error'].keys() if kk in k]
+
+                        result[kk] += x
+                        err[kk] += dx
+
+                        if kk == 'td' or kk == 'tr':
+                            if np.any(np.array(x) < 1.):
+                                print("sharp rise/decay time detected in trigger window {0:n}: {1}".format(i+1, x))
+
+                                plot_time_line((t[idt0-idlo:idt0+idup] - t[idt0-idlo]) * 1e6 -
+                                               r['parameters']['steplo'],
+                                               v[idt0-idlo:idt0+idup] * 1e3,
+                                               dv=r['parameters']['dv'],
+                                               function=r['parameters']['function'],
+                                               func_kwargs=r['result'])
+
+                                fname = os.path.join(args.directory, 'fit_pulse-t-sharp'
+                                                                     '_{0:05n}{1:s}.png'.format(i+1, suffix))
+
+                                plt.savefig(fname, format='png', dpi=150)
+                                print("plotted time line to {0:s}".format(fname))
+                                plt.close("all")
 
                 # if only one pulse in trigger window, add to average pulse array
                 if len(r['result']['value'].keys()) == 5:
-                    idup = np.round(r['parameters']['stepup'] * 1e-6 * r['parameters']['fSample'], 0).astype(np.int)
-                    idlo = np.round(r['parameters']['steplo'] * 1e-6 * r['parameters']['fSample'], 0).astype(np.int)
-                    idt0 = np.where(t == r['t0'])[0][0]
-                    if idt0-idlo < 0:
-                        idlo = 0
-                    if idt0+idup >= t.size:
-                        idup = 0
                     vavg.append(v[idt0-idlo: idt0+idup])
 
     # determine and fit average pulse
     if len(vavg):
         vavg = np.array(vavg) * 1e3
+        print ("shape of average pulse array: {0}".format(vavg.shape))
         tavg = np.linspace(0.,vavg.shape[1] / r['parameters']['fSample'] * 1e6, vavg.shape[1])
-
-        fig = plt.figure(figsize = (6, 4))
-        plt.fill_between(tavg, vavg.mean(axis=0) - np.sqrt(vavg.var(axis=0)),
-                         y2=vavg.mean(axis=0) + np.sqrt(vavg.var(axis=0)),
-                         alpha=0.2, color=plt.cm.tab10(0.))
-        plt.plot(tavg,vavg.mean(axis=0), color=plt.cm.tab10(0.), label='average pulse')
-        plt.xlabel("Time ($\mu$s)")
-        plt.ylabel("Voltage (mV)")
 
         # fit the average pulse
         ftl = FitTimeLine(t=tavg,
@@ -129,27 +143,18 @@ if __name__ == '__main__':
                         dvdt_thr=-1. * args.dvdt_thr if args.dvdt_thr < 25. else -25.,
                         **kwargs)
 
-            func = TimeLine(numcomp=ravg['numcomp'], function=r['parameters']['function'])
-
-            plt.plot(tavg, func(tavg, **ravg['fitarg']),
-                        label='fit to average pulse', ls='--', color=plt.cm.tab10(0.1))
-
-            chi2dof = ravg['chi2'] / ravg['dof']
-            string = "$\\chi^2 / \\mathrm{{d.o.f.}} = {0:.2f}$\n" \
-                     "$t_\\mathrm{{rise}} = ({1:.2f} \\pm {2:.2f})\\mu$s\n" \
-                     "$t_\\mathrm{{decay}} = ({3:.2f} \\pm {4:.2f})\\mu$s".format(chi2dof, ravg['value']['tr_000'],
-                                                                             ravg['error']['tr_000'],
-                                                                             ravg['value']['td_000'],
-                                                                             ravg['error']['td_000'])
-
-            leg = plt.legend(title=string, fontsize='small')
-            plt.setp(leg.get_title(), fontsize='small')
-            plt.savefig(os.path.join(args.directory, 'avg_pulse{0:s}.png'.format(suffix)), dpi=150, format='png')
-            plt.close("all")
-
         except (RuntimeError,ValueError) as e:
             print("Couldn't fit average pulse, Error message: {0}".format(e))
-            ravg = {'fit_ok': False}
+            ravg = None
+
+        fig = plt.figure(figsize = (6, 4))
+        plot_time_line(tavg, vavg.mean(axis=0), dv=np.sqrt(vavg.var(axis=0)),
+                       function=r['parameters']['function'],
+                       func_kwargs=ravg, data_label='average pulse', func_label='fit to average pulse')
+
+        fig.savefig(os.path.join(args.directory, 'avg_pulse{0:s}.png'.format(suffix)),
+                    dpi=150, format='png')
+        plt.close("all")
 
     # plot histograms of single fits
     result = {k: np.array(v) for k, v in result.items()}

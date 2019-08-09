@@ -7,8 +7,9 @@ import logging
 import time
 from fastespy.readpydata import readgraphpy
 from fastespy.analysis import build_trigger_windows, filter
-from fastespy.fitting import TimeLine, FitTimeLine
+from fastespy.fitting import FitTimeLine
 from fastespy.analysis import init_logging
+from fastespy.plotting import plot_time_line
 
 if __name__ == '__main__':
     usage = "usage: %(prog)s -d directory -f Sampling frequency [-s suffix]"
@@ -119,12 +120,6 @@ if __name__ == '__main__':
             y = v_trig[i] * 1e3
         dy = np.full(y.size, args.dv)
 
-        if args.control_plots:
-            ax = plt.subplot(111)
-            ax.plot((t - t0[i]) * 1e6, y, ls='-', label='data')
-            ax.fill_between((t - t0[i]) * 1e6, (y - dy), y2=(y + dy)[sli],
-                     alpha=0.3)
-
         ftl = FitTimeLine(t=(t - t0[i]) * 1e6,
                           v=y,
                           dv=dy,
@@ -165,26 +160,23 @@ if __name__ == '__main__':
                     **kwargs)
 
             if args.control_plots:
-                func = TimeLine(numcomp=r['numcomp'], function=args.function)
-
-                ax.plot((t - t0[i]) * 1e6, func((t - t0[i]) * 1e6, **r['fitarg']),
-                        label='fit')
-                chi2dof = r['chi2'] / r['dof']
-                string = "$t_0$ = {1:.0f}$\mu$s\n" \
-                 "$\chi^2 / \mathrm{{d.o.f.}} = {0:.2f}$".format(chi2dof, t0[i] * 1e6)
+                plot_time_line((t - t0[i]) * 1e6,
+                               y,
+                               dv=dy,
+                               function=args.function,
+                               func_kwargs=r)
 
                 for j in range(r['numcomp']):
-                    ax.axvline(r['value']['t0_{0:03}'.format(j)],
-                           ls='--', color='r', lw=0.5, label='trigger time')
-
-                leg = ax.legend(title=string, fontsize='small')
-                plt.setp(leg.get_title(), fontsize='small')
-                ax.set_ylabel(r"Voltage (mV)")
-                ax.set_xlabel(r"Time ($\mu$s)")
+                    plt.axvline(r['value']['t0_{0:03}'.format(j)],
+                                ls='--', color='r', lw=0.5)
 
         except (RuntimeError,ValueError) as e:
             logging.error("Couldn't fit trigger window {0:n}, Error message: {1}".format(i+1,e))
             r = {'fit_ok': False}
+            if args.control_plots:
+                plot_time_line((t - t0[i]) * 1e6,
+                               y,
+                               dv=dy)
 
         if args.control_plots:
             plt.savefig(os.path.join(args.directory, "fit_pulse_{0:05n}_c{1:n}.png".format(i+1, args.usedchunk)),
