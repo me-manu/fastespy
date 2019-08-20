@@ -2,9 +2,11 @@ from __future__ import absolute_import, division, print_function
 import numpy as np
 import glob
 import os
+import pickle
+import bz2
+
 
 def readgraphpy(directory, split = '-', checkroot = True, inputid = 'in', prefix = ''):
-
     """
     Read data from a ROOT graph and save as numpy npz file.
 
@@ -42,3 +44,30 @@ def readgraphpy(directory, split = '-', checkroot = True, inputid = 'in', prefix
             v.append(y)
 
     return t, v, tin, vin
+
+
+def readconvertedpickle(picklefile, channel=0):
+    """
+    Function to read in converted root raw file
+    after running script fastespy/fastespy/scripts/convert_root_file_to_python.py
+
+    :param picklefile: str
+        path to pickle file
+    :param channel: int
+        Channel id, either 0 (channel A, default), or 1 (channel B).
+    :return: list
+        unplickled list of dictionaries of triggers
+    """
+
+    with bz2.BZ2File(picklefile, "rb") as f:
+        r = pickle.load(f)[channel]
+
+    # r is now a list of dictionaries, one dict per trigger
+    # convert the data to numpy arrays
+    # and add a time key
+    for i in range(len(r)):
+        r[i]['data'] = np.array(r[i]['data'])
+        r[i]['time'] = r[i]['timeStamp'] + \
+                       np.arange(0., r[i]['data'].size / r[i]['samplingFreq'], 1. / r[i]['samplingFreq'])
+
+    return r
