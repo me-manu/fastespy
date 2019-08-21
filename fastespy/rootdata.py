@@ -16,7 +16,10 @@ def readgraph(directory, split = '-', overwrite = False, inputid = 'in', prefix 
     :return:
     """
     files = glob.glob(os.path.join(directory, "{0:s}*.root".format(prefix)))
-    files = sorted(files, key=lambda f: int(os.path.basename(f).split(".")[0].split(split)[-1]))
+    try:
+        files = sorted(files, key=lambda f: int(os.path.basename(f).split(".")[0].split(split)[-1]))
+    except ValueError as e:
+        print("Warning: could not sort root files by name: {0}".format(e))
 
     npzfiles = [f.replace('.root', '.npz') for f in files]
 
