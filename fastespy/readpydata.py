@@ -6,7 +6,7 @@ import pickle
 import bz2
 
 
-def readgraphpy(directory, split = '-', checkroot = True, inputid = 'in', prefix = ''):
+def read_graph_py(directory, split = '-', checkroot = True, inputid = 'in', prefix = ''):
     """
     Read data from a ROOT graph and save as numpy npz file.
 
@@ -46,7 +46,7 @@ def readgraphpy(directory, split = '-', checkroot = True, inputid = 'in', prefix
     return t, v, tin, vin
 
 
-def readconvertedpickle(picklefile, channel=0):
+def read_converted_pickle(picklefile, channel=0):
     """
     Function to read in converted root raw file
     after running script fastespy/fastespy/scripts/convert_root_file_to_python.py

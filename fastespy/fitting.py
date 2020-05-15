@@ -5,11 +5,11 @@ import time
 import functools
 import logging
 from .analysis import build_trigger_windows
-from scipy.integrate import simps
 from scipy import optimize as op
 from collections import OrderedDict
 from copy import deepcopy
 from scipy.special import gammainc
+from .functions import TimeLine
 
 pvalue = lambda dof, chisq: 1. - gammainc(.5 * dof, .5 * chisq)
 
@@ -25,178 +25,6 @@ def setDefault(func = None, passed_kwargs = {}):
             kwargs.setdefault(k,passed_kwargs[k])
         return func(*args, **kwargs)
     return init
-
-# the flare function
-def expflare(t,**kwargs):
-    """
-    Exponential flare function adopted for TES time line
-
-    f(t) = c - 2. * A / (exp((t0 - t) / tr) + exp((t - t0) / td)) +
-
-    :param t: array-like
-        array with times
-    :param kwargs:
-        Function parameters: t0, tr, td, A, c, all floats
-
-    :return: array
-        array with function values
-    """
-    if np.isscalar(t):
-        t = np.array([t])
-    elif type(t) == list:
-        t = np.array(t)
-
-    rise_exp = (kwargs['t0'] - t) / kwargs['tr']
-    decay_exp = (t - kwargs['t0']) / kwargs['td']
-
-    exp_rise = np.exp(rise_exp)
-    exp_decay = np.exp(decay_exp)
-
-    result = kwargs['c'] - 2. * kwargs['A'] / (exp_rise + exp_decay)
-    return result
-
-def tesresponse(t,**kwargs):
-    """
-    TES response function in small signal limit,
-    See Christoph Weinsheimer's PhD thesis, Chapter 10
-
-    I(t) = c - A / xi  * (exp(-(t - t0) / tr) - exp(-(t - t0) / td)) for t > t0
-        and c otherwise
-    xi = (td / tr)^(td / (tr - td)) - (td / tr)^(tr / (tr - td))
-
-    :param t: array-like
-        array with times
-    :param kwargs:
-        Function parameters: t0, tr, td, A, c
-
-    :return: array
-        array with function values
-    """
-    if np.isscalar(t):
-        t = np.array([t])
-    elif type(t) == list:
-        t = np.array(t)
-
-    xi = np.power(kwargs['td'] / kwargs['tr'], kwargs['td'] / (kwargs['tr'] - kwargs['td'])) \
-        - np.power(kwargs['td'] / kwargs['tr'],kwargs['tr'] / (kwargs['tr'] - kwargs['td']))
-
-    m = t > kwargs['t0']
-
-    rise_exp = -(t - kwargs['t0']) / kwargs['tr']
-    decay_exp = -(t - kwargs['t0']) / kwargs['td']
-
-    exp_rise = np.exp(rise_exp)
-    exp_decay = np.exp(decay_exp)
-
-    result = np.zeros_like(t)
-    result[m] = kwargs['c'] - (exp_rise - exp_decay)[m] * kwargs['A'] / xi
-    result[~m] = np.full((~m).sum(), kwargs['c'])
-    return result
-
-# the flare function for several components
-class TimeLine(object):
-    """
-    Time line function with signal response for several peaks within a time window
-
-    f(t) = sum_i response_i(t)
-
-    """
-    def __init__(self,numcomp, function = 'tesresponse'):
-        self._numcomp = numcomp
-        self._result = np.array([])
-        if function == 'tesresponse':
-            self._f = tesresponse
-        elif function == 'expflare':
-            self._f = expflare
-        else:
-            raise ValueError("Unknown response function chosen")
-        return
-
-    @property
-    def numcomp(self):
-        return self._numcomp
-
-    @property
-    def result(self):
-        return self._result
-
-    @property
-    def result_quite(self):
-        return self._result_quite
-
-
-    @numcomp.setter
-    def numcomp(self, numcomp):
-        if numcomp < 1:
-            raise Exception("There must at least be one component")
-        self._numcomp = numcomp
-        return
-
-    @property
-    def f(self):
-        return self._f
-
-    @f.setter
-    def f(self, function):
-        if function == 'tesresponse':
-            self._f = tesresponse
-        elif function == 'expflare':
-            self._f = expflare
-        else:
-            raise ValueError("Unknown response function chosen")
-        return
-
-    def __call__(self,t, **kwargs):
-        """
-        Evaluate the function
-
-        :param t: array-like
-            time values
-        :param kwargs:
-            The signal resonse parameters
-        :return: array with function values
-        """
-        kwargs.setdefault('force_zero', True)
-        if np.isscalar(t):
-            t = np.array([t])
-        elif type(t) == list:
-            t = np.array(t)
-
-        self._result = np.zeros((self._numcomp, t.size))
-        for i in list(range(self._numcomp)):
-            self._result[i] = self._f(t,
-                                      t0 = kwargs['t0_{0:03n}'.format(i)],
-                                      tr = kwargs['tr_{0:03n}'.format(i)],
-                                      td = kwargs['td_{0:03n}'.format(i)],
-                                      c = 0.,
-                                      A = kwargs['A_{0:03n}'.format(i)]
-                                      )
-
-
-        return kwargs['c'] + self._result.sum(axis = 0)
-
-    def integral(self,tmin,tmax, tstep = 100, **kwargs):
-        """
-        Calculate integral of each component
-
-        :param tmin: float
-            minimum time
-        :param tmax: float
-            maximum time
-        :param tstep:
-            number of steps for integration
-        :param kwargs:
-            function parameters
-        :return: array
-            integrated signal responses for each component
-        """
-        tt = []
-        for i in list(range(self._numcomp)):
-            tt.append(np.linspace(tmin, tmax, tstep))
-        tt = np.array(tt)
-        self.__call__(tt[0], **kwargs)
-        return simps(self._result, tt, axis = 1)
-
 
 minuit_def = {
     'verbosity': 0,
@@ -480,7 +308,7 @@ class FitTimeLine(object):
     @setDefault(passed_kwargs = minuit_def)
     def fit(self,tmin = None, tmax = None, function = 'tesresponse',
             minos = 1., parscan = 'none', fmax = 1e6, norder = 3,
-            dvdt_thr = -25., maxcomp = 3,
+            dvdt_thr = -25., maxcomp = 3, v_thr=0.,
             **kwargs):
         """
         Fit the time series
@@ -505,6 +333,8 @@ class FitTimeLine(object):
             Order of filter (used to find trigger time)
         :param dvdt_thr: float
             threshold to find trigger from derivative in mV / micro sec. Default: -25.
+        :param v_thr: float
+            threshold to find trigger from time series in V. Default: 0.
         :param maxcomp: int
             Maximum pulse components allowed in one trigger window.
         :param kwargs:
@@ -525,9 +355,15 @@ class FitTimeLine(object):
             self._dv = self._dv[m]
 
         t0s, _, _ = build_trigger_windows(self._t / 1e6, self._v / 1e3,
-                        self._fSample, thr=dvdt_thr, fmax=fmax, norder=norder)
+                                          self._fSample,
+                                          thr=dvdt_thr,
+                                          thr_v=v_thr,
+                                          fmax=fmax,
+                                          norder=norder)
+
         t0s = np.array(t0s) * 1e6  # convert back to micro s
         ntrigger = t0s.size
+        logging.info("Within window, found {0:n} point(s) satisfying trigger criteria".format(ntrigger))
 
         t1 = time.time()
 
@@ -536,15 +372,16 @@ class FitTimeLine(object):
         # loop through trigger times
         #for i, t0 in enumerate(t0s):
         i = 0
-        while i < t0s.size and i < maxcomp:
+        while i < ntrigger and i < maxcomp:
             f = TimeLine(numcomp=i+1, function=function)
 
             kwargs['pinit']['t0_{0:03n}'.format(i)] = t0s[i]
             kwargs['limits']['t0_{0:03n}'.format(i)] = [self._t.min(), self._t.max()]
 
             if i > 0:
-                kwargs['pinit'].update({k : self._m.values[k] for k in kwargs['pinit'].keys() \
-                                        if k in self._m.values.keys()})
+                if self._m.migrad_ok():
+                    kwargs['pinit'].update({k : self._m.values[k] for k in kwargs['pinit'].keys() \
+                                            if k in self._m.values.keys()})
                 for k in ['td', 'tr', 'A']:
                     kwargs['pinit']['{0:s}_{1:03n}'.format(k, i)] = kwargs['pinit']['{0:s}_000'.format(k)]
                     kwargs['limits']['{0:s}_{1:03n}'.format(k, i)] = kwargs['limits']['{0:s}_000'.format(k)]
@@ -614,17 +451,19 @@ class FitTimeLine(object):
 
             else:
                 self.__print_failed_fit()
-                return dict(chi2 = self._m.fval,
-                      value = dict(self._m.values),
-                      error = dict(self._m.errors),
-                      aic = 2. * npar + self._m.fval,
-                      dof = self._t.size - npar,
-                      npar = npar,
-                      fitarg = self._m.fitarg,
-                      numcomp = i + 1,
-                      fit_ok = False
-                      )
 
+                # terminate if we have tested all components
+                if i == t0s.size - 1 or i == maxcomp - 1:
+                    return dict(chi2 = self._m.fval,
+                                value = dict(self._m.values),
+                                error = dict(self._m.errors),
+                                aic = 2. * npar + self._m.fval,
+                                dof = self._t.size - npar,
+                                npar = npar,
+                                fitarg = self._m.fitarg,
+                                numcomp = i + 1,
+                                fit_ok = False
+                                )
 
             vals.append(dict(self._m.values))
             errs.append(dict(self._m.errors))

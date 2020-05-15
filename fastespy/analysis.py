@@ -146,6 +146,8 @@ def derivative(v):
     return dv
 
 def filter(x, fSample, fmax = 1.e6, norder = 3):
+
+    # calculate the Nyquist frequency
     fNyq = x.size / 2. /(x.size - 1) * fSample
     if norder > 0:
         b, a = signal.butter(norder, fmax / fNyq)
@@ -154,7 +156,7 @@ def filter(x, fSample, fmax = 1.e6, norder = 3):
         xf = x
     return xf
 
-def derivative_filtered(t,v,fSample, fmax = 1.e6, norder = 3):
+def derivative_filtered(v,fSample, fmax = 1.e6, norder = 3):
     """
     Calculate the derivative and apply a filter
 
@@ -171,16 +173,14 @@ def derivative_filtered(t,v,fSample, fmax = 1.e6, norder = 3):
     :return:
         derivative values and filtered derivative values
     """
-    # calculate the Nyquist frequency
-    fNyq = t.size / 2. /(t.size - 1) * fSample
     # calculate derivative
     dv = derivative(v) * fSample
     # if filter order larger than 0, apply filter above fmax frequency
     dvf = filter(dv, fSample, fmax=fmax, norder=norder)
     return dv, dvf
 
-def build_trigger_windows(t,v,fSample, thr = -50., thr_v = 0.,
-    tstepup=50., tsteplo=10., fmax = 1.e6, norder = 3):
+def build_trigger_windows(t,v,fSample, thr = -50., thr_v = -0.001,
+    tstepup=10., tsteplo=5., fmax = 1.e6, norder = 3):
     """
     Build trigger windows from a continuous time line
 
@@ -193,10 +193,16 @@ def build_trigger_windows(t,v,fSample, thr = -50., thr_v = 0.,
     :param thr: float
         threshold value for voltage derivative for trigger.
         In units mV / micro s, default is -50.
+    :param thr_v: float
+        threshold value for voltage amplitude
+        In units V, default is -0.001 V = -1. mV
     :param tstepup: float
         time window after trigger, in micro s, default is 50.
+        No additional trigger within this time will be considered.
+    :param tsteplo:
     :param tsteplo:
         time window before trigger, in micro s, default is 10.
+        No additional trigger within this time will be considered.
     :param fmax:
         maximum frequency for filtering voltage in Hz. Default is 1 MHz
     :param norder:
@@ -205,9 +211,10 @@ def build_trigger_windows(t,v,fSample, thr = -50., thr_v = 0.,
         three lists with trigger times and times and voltage values of trigger windows.
     """
 
-    dv, dvf = derivative_filtered(t, v, fSample, fmax=fmax, norder=norder)
+    dv, dvf = derivative_filtered(v, fSample, fmax=fmax, norder=norder)
 
     mtrig = np.where((dvf * 1e3 / 1e6 < thr) & (v < thr_v))[0] # convert dv to mV / micro s
+
     #idxs = np.where(np.diff(mtrig) > 1)[0]  # find indeces that are non-consecutive
     idxs = np.where(np.diff(mtrig) > int(tstepup * 1e-6 * fSample))[0]  # find indeces that are larger than window
 
@@ -216,7 +223,8 @@ def build_trigger_windows(t,v,fSample, thr = -50., thr_v = 0.,
     v_trig = []
 
     if not len(mtrig):
-        raise ValueError("No triggers found, decrease threshold (current: {0:.2f}!)".format(thr))
+        raise ValueError("No triggers found, decrease threshold (current: dvdt = {0:.2f} mV / mu s"\
+                         ", v = {1:.2e} V)".format(thr, thr_v))
     print ("{0:n} trigger(s) found!".format(len(idxs)+1))
 
     # build first trigger window
