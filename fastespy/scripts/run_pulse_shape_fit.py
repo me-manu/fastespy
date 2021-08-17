@@ -5,7 +5,7 @@ import os
 import numpy as np
 import logging
 import time
-from fastespy.readpydata import readgraphpy
+from fastespy.readpydata import read_graph_py
 from fastespy.analysis import build_trigger_windows, filter
 from fastespy.fitting import FitTimeLine
 from fastespy.analysis import init_logging
@@ -43,15 +43,17 @@ if __name__ == '__main__':
                         default = 3)
     parser.add_argument('--istart', help='Start at this trigger window', type=int)
     parser.add_argument('--istop', help='Stop this trigger window', type=int)
+    parser.add_argument('--minos', help='Compute minos error within this confidence level', type=float, default=1.)
+    parser.add_argument('--maxcomp', help='Maximum number of components that are tested', type=int, default=3)
 
     args = parser.parse_args()
-    init_logging("WARNING", color=True)
+    init_logging("INFO", color=True)
 
     if not len(glob.glob(os.path.join(args.directory, "{0:s}*.root".format(args.suffix)))) == len(
             glob.glob(os.path.join(args.directory, "{0:s}*.npz".format(args.suffix)))):
         raise IOError("Error: convert files first!")
 
-    t, v, tin, vin = readgraphpy(args.directory, prefix=args.suffix)
+    t, v, tin, vin = read_graph_py(args.directory, prefix=args.suffix)
 
     # set the mask for the voltage
     if args.control_plots:
@@ -155,7 +157,8 @@ if __name__ == '__main__':
             r = ftl.fit(tmin=None,
                     tmax=None,
                     function=args.function,
-                    minos=1., parscan='none',
+                    minos=args.minos, parscan='none',
+                    maxcomp=args.maxcomp,
                     dvdt_thr=-1. * args.dvdt_thr if args.dvdt_thr < 25. else -25.,
                     **kwargs)
 
@@ -189,7 +192,7 @@ if __name__ == '__main__':
 
         np.save(fname,d)
 
-        print ("written results to {0:s}".format(fname))
+        logging.info("written results to {0:s}".format(fname))
 
         del ftl
 

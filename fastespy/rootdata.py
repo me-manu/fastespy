@@ -4,9 +4,10 @@ import glob
 import os
 import numpy as np
 import time
+import logging
+
 
 def readgraph(directory, split = '-', overwrite = False, inputid = 'in', prefix = ''):
-
     """
     Read data from a ROOT graph and save as numpy npz file.
 
@@ -61,3 +62,48 @@ def readgraph(directory, split = '-', overwrite = False, inputid = 'in', prefix 
             v.append(y)
 
     return t, v, tin, vin
+
+
+def root2py_fit_results_axel(path,
+                             tree_name="TES_fits",
+                             features=("ampli", "peak", "rise", "decay", "const", "chi2")):
+    """
+    Read in Axel's fit results obtained with ROOT
+    and save as npy file
+
+    Parameters
+    ----------
+    path: str
+        path containing the root files
+
+    tree_name: str
+        Name of root tree where results are stored
+
+    features: list of strings
+        feature names that are extracted from root tree
+    """
+    data_files = glob.glob(os.path.join(path, '*.root'))
+    if not len(data_files):
+        raise ValueError("No files found!")
+
+    for i, d in enumerate(data_files):
+
+        logging.info("Reading file {0:s}, assigning event id {1:n}".format(d, i))
+        r = root.TFile(d)
+        t = root.TTree()
+        r.GetObject(tree_name, t)
+        n_events = t.GetEntries()
+
+        result = dict()
+        for k in features:
+            t.Draw(k)
+            vals = t.GetVal(0)
+            result[k] = np.zeros(n_events)
+            for j in range(n_events):
+                result[k][j] = vals[j]
+        result['type'] = np.full(n_events, i)
+
+        del r, t
+        filename = os.path.join(os.path.dirname(d), os.path.basename(d).replace('root','npy'))
+        logging.info(f"Saving fit results to {filename}")
+        np.save(filename, result)

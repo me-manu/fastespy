@@ -1,11 +1,13 @@
 from __future__ import absolute_import, division, print_function
+import logging
 import argparse
 import glob
 import os
 import numpy as np
 from fastespy.fitting import pvalue
-from fastespy.fitting import TimeLine, FitTimeLine
-from fastespy.readpydata import readgraphpy
+from fastespy.fitting import FitTimeLine
+from fastespy.analysis import init_logging
+from fastespy.readpydata import read_graph_py
 from fastespy.plotting import plot_time_line
 import matplotlib
 matplotlib.use("agg")
@@ -24,8 +26,9 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--usedchunk', help='the data chunk to use when mask is applied', default=0, type=int)
     args = parser.parse_args()
 
+    init_logging("INFO", color=True)
     # read the data
-    t, v, tin, vin = readgraphpy(args.directory, prefix=args.suffix)
+    t, v, tin, vin = read_graph_py(args.directory, prefix=args.suffix)
     t = t[args.usedchunk]
     v = v[args.usedchunk]
 
@@ -43,7 +46,7 @@ if __name__ == '__main__':
 
     # loop through files
     for i, rf in enumerate(result_files):
-        print("loading file {0:n} / {1:n}".format(i + 1, len(result_files)))
+        logging.info("loading file {0:n} / {1:n}".format(i + 1, len(result_files)))
         r = np.load(rf, allow_pickle=True).flat[0]
         # extract the rise and decay times
         # trigger times, amplitudes, and backgrounds
@@ -77,7 +80,8 @@ if __name__ == '__main__':
 
                         if kk == 'td' or kk == 'tr':
                             if np.any(np.array(x) < 1.):
-                                print("sharp rise/decay time detected in trigger window {0:n}: {1}".format(i+1, x))
+                                logging.info("sharp rise/decay time detected in trigger window {0:n}: {1}".format(
+                                                i+1, x))
 
                                 plot_time_line((t[idt0-idlo:idt0+idup] - t[idt0-idlo]) * 1e6 -
                                                r['parameters']['steplo'],
@@ -90,7 +94,7 @@ if __name__ == '__main__':
                                                                      '_{0:05n}{1:s}.png'.format(i+1, suffix))
 
                                 plt.savefig(fname, format='png', dpi=150)
-                                print("plotted time line to {0:s}".format(fname))
+                                logging.info("plotted time line to {0:s}".format(fname))
                                 plt.close("all")
 
                 # if only one pulse in trigger window, add to average pulse array
@@ -100,7 +104,7 @@ if __name__ == '__main__':
     # determine and fit average pulse
     if len(vavg):
         vavg = np.array(vavg) * 1e3
-        print ("shape of average pulse array: {0}".format(vavg.shape))
+        logging.info("shape of average pulse array: {0}".format(vavg.shape))
         tavg = np.linspace(0.,vavg.shape[1] / r['parameters']['fSample'] * 1e6, vavg.shape[1])
 
         # fit the average pulse
@@ -144,7 +148,7 @@ if __name__ == '__main__':
                         **kwargs)
 
         except (RuntimeError,ValueError) as e:
-            print("Couldn't fit average pulse, Error message: {0}".format(e))
+            logging.warning("Couldn't fit average pulse, Error message: {0}".format(e))
             ravg = None
 
         fig = plt.figure(figsize = (6, 4))

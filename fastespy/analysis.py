@@ -6,7 +6,7 @@ import logging
 import sys
 
 
-def init_logging(level, color = False):
+def init_logging(level, color=False):
     """
     Setup logger.
 
