@@ -12,6 +12,27 @@ from fastespy.analysis import init_logging
 
 
 def load_data(files, feature_names, light_cleaning_cuts={}):
+    """
+    Load data from Rikhav's pulse fitting
+
+    Parameters
+    ----------
+    files: list
+        list of file names
+
+    feature_names: list
+        list of feature names to be used
+
+    light_cleaning_cuts: dict
+        dictionary with feature names as key and cleaning options to be used
+
+    Returns
+    -------
+    Tuple containing:
+        - Dictionary with fitting data
+        - Dictionary for raw data
+        - Float with total observation time
+    """
 
     result = {'type': []}
     t_tot_hrs = 0.
@@ -19,6 +40,7 @@ def load_data(files, feature_names, light_cleaning_cuts={}):
     data = {"time": [], "data": []}
     # loop through files
     logging.info("Reading data")
+
     for f in tqdm.tqdm(files):
         x = np.load(f, allow_pickle=True).tolist()
 
@@ -76,7 +98,12 @@ def load_data(files, feature_names, light_cleaning_cuts={}):
             dtype = np.float32
         result[k] = np.array(v, dtype=dtype)
 
-    return result, t_tot_hrs
+    logging.info("In total, there are {0:n} light events and {1:n} background events"
+                 " for an observation time of {2:.2f} hours".format(result['type'].sum(),
+                                                                    np.invert(result['type']).sum(),
+                                                                    t_tot_hrs
+                                                                    ))
+    return result, data, t_tot_hrs
 
 
 if __name__ == "__main__":
@@ -134,9 +161,10 @@ if __name__ == "__main__":
         "decay time": "decay < 10.e-6",
         "trigger time": "(trigger >= 29.5e-6) & (trigger <= 30.8e-6)",  # from gaussian fit, 5 sigma interval
     }
+    logging.info("Using cleaning cuts {}".format(light_cleaning_cuts))
 
     # read the data
-    result, t_tot_hrs = load_data(files, feature_names, light_cleaning_cuts=light_cleaning_cuts)
+    result, data, t_tot_hrs = load_data(files, feature_names, light_cleaning_cuts=light_cleaning_cuts)
 
     # convert data to ML format
     X, y = convert_data_to_ML_format(result,
@@ -154,7 +182,7 @@ if __name__ == "__main__":
     # perform the hyper parameter optimazition
     for i, (train_idx, test_idx) in enumerate(skf.split(X, y)):
 
-        logging.info(" Running optimazation for split {0:n} / {1:n}".format(i + 1, args.kfolds))
+        logging.info(" Running optimization for split {0:n} / {1:n}".format(i + 1, args.kfolds))
 
         ml = MLHyperParTuning(X[train_idx], y[train_idx],
                               X_test=X[test_idx],

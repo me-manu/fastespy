@@ -298,6 +298,10 @@ class MLHyperParTuning(object):
     def t_obs(self):
         return self._t_obs
 
+    @property
+    def kf(self):
+        return self._kf
+
     @staticmethod
     def transform_data_log(X, y,
                            feature_names,
@@ -704,7 +708,7 @@ class MLHyperParTuning(object):
         plt.figure(figsize=(6 * 4, n_misid))
         iplot = 1
         for i, idx in enumerate(result['idx_test'][m_misid]):
-            ax = plt.subplot(n_misid / 4 + 1, 4, iplot)
+            ax = plt.subplot(int(n_misid / 4) + 1, 4, iplot)
 
             if X is not None and feature_names is not None:
                 label = ""
