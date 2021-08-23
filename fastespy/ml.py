@@ -697,12 +697,20 @@ class MLHyperParTuning(object):
                                       data_voltage,
                                       X=None,
                                       feature_names=None,
-                                      path=PosixPath("./")
+                                      path=PosixPath("./"),
+                                      plot_false_positive=True,
+                                      save_plot=True
                                       ):
         """
         Plot the misidentified background time lines
         """
-        m_misid = (result['y_test'] == 0) & (result['y_pred_test'][scorer] == 1)
+        if plot_false_positive:
+            # plot false signal time lines
+            m_misid = (result['y_test'] == 0) & (result['y_pred_test'][scorer] == 1)
+        else:
+            # else plot false background time lines
+            m_misid = (result['y_test'] == 1) & (result['y_pred_test'][scorer] == 0)
+
         n_misid = np.sum(m_misid)
 
         plt.figure(figsize=(6 * 4, n_misid))
@@ -729,8 +737,17 @@ class MLHyperParTuning(object):
 
         if not path.exists():
             path.mkdir(parents=True)
-        plt.savefig(path / f"misid_events_{scorer:s}_{result['classifier']}.png", dpi=150)
-        plt.close("all")
+
+        if save_plot:
+            if plot_false_positive:
+                plt.savefig(path / f"misid_events_fp_{scorer:s}_{result['classifier']}.png", dpi=150)
+            else:
+                plt.savefig(path / f"misid_events_fn_{scorer:s}_{result['classifier']}.png", dpi=150)
+            plt.close("all")
+            return None
+
+        else:
+            return ax
 
     @staticmethod
     def print_performance_report(results, scoring, t_tot_s):
