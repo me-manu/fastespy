@@ -744,10 +744,6 @@ class MLHyperParTuning(object):
             else:
                 plt.savefig(path / f"misid_events_fn_{scorer:s}_{result['classifier']}.png", dpi=150)
             plt.close("all")
-            return None
-
-        else:
-            return ax
 
     @staticmethod
     def print_performance_report(results, scoring, t_tot_s):
