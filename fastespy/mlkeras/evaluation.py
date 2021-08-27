@@ -145,6 +145,8 @@ def plot_sig_vs_thr(model, X, y_true, t_obs_hours, N_tot, step=0.0001):
     ax.grid()
     ax.axvline(threshold[imax], color='k', ls='--', zorder=-1)
 
+
+
     ax = plt.subplot(312)
     ax.plot(threshold, bkg_rate)
     ax.set_yscale("log")
@@ -161,6 +163,8 @@ def plot_sig_vs_thr(model, X, y_true, t_obs_hours, N_tot, step=0.0001):
     ax.tick_params(direction="in")
     ax.grid()
     ax.axvline(threshold[imax], color='k', ls='--', zorder=-1)
+
+    ax.set_xlabel("Threshold")
 
     return ax, threshold, significance, bkg_rate, eff
 
