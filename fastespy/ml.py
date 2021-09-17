@@ -86,6 +86,96 @@ default_pars = dict(
          }
 )
 
+def plot_metric(history, ax=None, metric="loss", **kwargs):
+    """
+    Plot the evolution of a classification metric
+    with epocks
+
+    Parameters
+    ----------
+    history: keras history object
+        the classification history
+
+    ax: matplotlib axes object
+        axes for plotting
+
+    metric: string
+        name of metric to plot
+
+    kwargs: dict
+    additional kwargs passed to plot
+
+    Returns
+    -------
+    matplotlib axes object
+    """
+    if ax is None:
+        ax = plt.gca()
+
+    label = kwargs.pop('label', '')
+    ax.semilogy(history.epoch, history.history[metric], label='Train ' + label, **kwargs)
+
+    kwargs.pop('ls', None)
+    ax.semilogy(history.epoch, history.history[f'val_{metric}'], label='Val ' + label, ls='--', **kwargs)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel(metric)
+    return ax
+
+def get_tp_fp_fn(y_true, y_pred, thr=0.5):
+    """
+    Get the numbers for true positive, false positive, and false negative
+    for binary classification for a certain threshold to classify an event as
+    a positive sample
+
+    Parameters
+    ----------
+    y_true: array-like
+        True class labels [0, 1]
+    y_pred: array-like
+        predicted class labels, i.e., real numbers in the interval [0,1]
+    thr: float
+        Threshold for classification as a positive event (Default: 0.5)
+
+    Returns
+    -------
+    Tuple with predicted class labels, true positives, false positives, and false negatives
+    """
+    class_pred = (y_pred > thr).flatten().astype(int)
+    tp = (class_pred == 1) & (y_true == 1)
+    fp = (class_pred == 1) & (y_true == 0)
+    fn = (class_pred == 0) & (y_true == 1)
+    return class_pred, tp, fp, fn
+
+def get_sig_bkg_rate_eff(y_true, y_pred, N_tot, t_obs, thr=0.5):
+    """
+    Compute the significance, background rate, detection efficiency
+
+    Parameters
+    ----------
+    y_true: array-like
+        True class labels [0, 1]
+    y_pred: array-like
+        predicted class labels, i.e., real numbers in the interval [0,1]
+    N_tot: int
+        total number of triggers in test and training sample
+    t_obs: float
+        obervation time in seconds during which N_tot triggers where observed
+    thr: float
+        Threshold for classification as a positive event (Default: 0.5)
+
+    Returns
+    -------
+    Tuple with significance, background rate, detection efficiency
+    """
+    class_pred, tp, fp, fn = get_tp_fp_fn(y_true, y_pred, thr=thr)
+
+    sig = significance_scorer(y_true, class_pred, t_obs=t_obs, N_tot=N_tot)
+    bkg_rate = fp.sum() / y_true.size * N_tot / t_obs
+    eff = tp.sum() / y_true.sum()
+
+    return sig, bkg_rate, eff
+
+
 def significance(n_b, obs_time, n_s = 2.8e-5, e_d=0.5, e_a=1.):
     """Signficance of a signal given some background rate and obs time"""
     N_b = obs_time * n_b
@@ -477,7 +567,7 @@ class MLHyperParTuning(object):
                                         mean_train=mean_best_train,
                                         std_train=std_best_train)
 
-    def _post_processing(self, n_jobs=8):
+    def _post_processing(self, n_jobs=8, step=0.002):
         """
         Retrain the classifier with best parameter set on whole
         training sample for each scorer, compute the learning curve
@@ -498,6 +588,8 @@ class MLHyperParTuning(object):
         self._prob_train = dict()
 
         train_sizes = (np.arange(0.1, 0.9, 0.1) * self._y_train.shape).astype(np.int)
+        thresholds = np.arange(0., 1. + step, step)
+        self._results['thresholds'] = thresholds
 
         for k, v in self._scoring.items():
             scorer = get_scorer(v)
@@ -518,6 +610,21 @@ class MLHyperParTuning(object):
 
             self._results['score_test'][k] = scorer(best_clf, self._X_test, self._y_test)
             self._results['score_train'][k] = scorer(best_clf, self._X_train, self._y_train)
+
+            # compute the dependence of significance, bkg rate and efficiency
+            # on the threshold value
+            for i in range(2):
+                sig, bkg, eff = np.zeros(thresholds.size), np.zeros(thresholds.size), np.zeros(thresholds.size)
+                for j, thr_j in enumerate(thresholds):
+                    sig[j], bkg[j], eff[j] = get_sig_bkg_rate_eff(self._y_test if i else self._y_train,
+                                                                  self._prob_test[k][:,1] if i else self._prob_train[k],
+                                                                  self._y_train.size + self._y_test.size,
+                                                                  self._t_obs, thr_j)
+
+                if i:
+                    self._results['thr_sig_bkg_eff_test'][k] = (sig, bkg, eff)
+                else:
+                    self._results['thr_sig_bkg_eff_train'][k] = (sig, bkg, eff)
 
             train_sizes, train_scores, valid_scores = learning_curve(best_clf, self._X_train, self._y_train,
                                                                      train_sizes=train_sizes,

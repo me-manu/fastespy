@@ -1,99 +1,12 @@
 from __future__ import absolute_import, division, print_function
 from tensorflow import keras
-from ..ml import significance_scorer
+import tensorflow as tf
+from .models import train_model
 import matplotlib.pyplot as plt
 import numpy as np
+import tempfile
+import os
 from sklearn.model_selection import KFold, StratifiedKFold
-
-def plot_metric(history, ax=None, metric="loss", **kwargs):
-    """
-    Plot the evolution of a classification metric
-    with epocks
-
-    Parameters
-    ----------
-    history: keras history object
-        the classification history
-
-    ax: matplotlib axes object
-        axes for plotting
-
-    metric: string
-        name of metric to plot
-
-    kwargs: dict
-    additional kwargs passed to plot
-
-    Returns
-    -------
-    matplotlib axes object
-    """
-    if ax is None:
-        ax = plt.gca()
-
-    label = kwargs.pop('label', '')
-    ax.semilogy(history.epoch, history.history[metric], label='Train ' + label, **kwargs)
-
-    kwargs.pop('ls', None)
-    ax.semilogy(history.epoch, history.history[f'val_{metric}'], label='Val ' + label, ls='--', **kwargs)
-    ax.set_xlabel('Epoch')
-    ax.set_ylabel(metric)
-    return ax
-
-def get_tp_fp_fn(y_true, y_pred, thr=0.5):
-    """
-    Get the numbers for true positive, false positive, and false negative
-    for binary classification for a certain threshold to classify an event as
-    a positive sample
-
-    Parameters
-    ----------
-    y_true: array-like
-        True class labels [0, 1]
-    y_pred: array-like
-        predicted class labels, i.e., real numbers in the interval [0,1]
-    thr: float
-        Threshold for classification as a positive event (Default: 0.5)
-
-    Returns
-    -------
-    Tuple with predicted class labels, true positives, false positives, and false negatives
-    """
-    class_pred = (y_pred > thr).flatten().astype(int)
-    tp = (class_pred == 1) & (y_true == 1)
-    fp = (class_pred == 1) & (y_true == 0)
-    fn = (class_pred == 0) & (y_true == 1)
-    return class_pred, tp, fp, fn
-
-def get_sig_bkg_rate_eff(y_true, y_pred, N_tot, t_obs, thr=0.5):
-    """
-    Compute the significance, background rate, detection efficiency
-
-    Parameters
-    ----------
-    y_true: array-like
-        True class labels [0, 1]
-    y_pred: array-like
-        predicted class labels, i.e., real numbers in the interval [0,1]
-    N_tot: int
-        total number of triggers in test and training sample
-    t_obs: float
-        obervation time in seconds during which N_tot triggers where observed
-    thr: float
-        Threshold for classification as a positive event (Default: 0.5)
-
-    Returns
-    -------
-    Tuple with significance, background rate, detection efficiency
-    """
-    class_pred, tp, fp, fn = get_tp_fp_fn(y_true, y_pred, thr=thr)
-
-    sig = significance_scorer(y_true, class_pred, t_obs=t_obs, N_tot=N_tot)
-    bkg_rate = fp.sum() / y_true.size * N_tot / t_obs
-    eff = tp.sum() / y_true.sum()
-
-    return sig, bkg_rate, eff
-
 
 def plot_sig_vs_thr(model, X, y_true, t_obs_hours, N_tot, step=0.0001):
     """
@@ -324,3 +237,162 @@ class SplitData(object):
                     self._y_val = self._y[idx_train][idx_val]
 
         return self._X_train, self._X_val, self._y_train, self._y_val
+
+
+class SignificanceMetric(keras.metrics.Metric):
+    """Class to evaluate significance of signal in LSW experiment"""
+
+    def __init__(self, name='significance',
+                 N_tot=1000.,
+                 e_d=0.5,
+                 n_s=2.8e-5,
+                 t_obs=20. * 24. * 3600.,
+                 thr=0.5,
+                 **kwargs):
+        super(SignificanceMetric, self).__init__(name=name, **kwargs)
+
+        self._N_tot = tf.cast(N_tot, self.dtype)
+        self._e_d = tf.cast(e_d, self.dtype)
+        self._n_s = tf.cast(n_s, self.dtype)
+        self._t_obs = tf.cast(t_obs, self.dtype)
+        self._thr = thr
+
+        self.significance = self.add_weight(name='significance', initializer='zeros')
+        self._n_samples = tf.Variable(0., name='current_sample_size', dtype=self.dtype)
+        self._n_true_samples = tf.Variable(0., name='current_number_true_samples', dtype=self.dtype)
+        self._tp_tot = tf.Variable(0., name='tp_total', dtype=self.dtype)
+        self._fp_tot = tf.Variable(0., name='fp_total', dtype=self.dtype)
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_pred = tf.greater_equal(y_pred, 0.5)
+        y_true = tf.cast(y_true, tf.bool)
+        y_pred = tf.cast(y_pred, tf.bool)
+
+        batch_size = tf.cast(tf.shape(y_true)[0], self.dtype)
+        self._n_samples.assign_add(batch_size)
+        self._n_true_samples.assign_add(tf.reduce_sum(tf.cast(y_true, self.dtype)))
+
+        # calculate efficiency, i.e., the number of true positives over all positives
+        tp = tf.logical_and(tf.equal(y_true, True), tf.equal(y_pred, True))
+        tp = tf.reduce_sum(tf.cast(tp, self.dtype))
+        self._tp_tot.assign_add(tp)
+        efficiency = self._tp_tot / self._n_true_samples
+
+        # false positive rate, i.e., false positives over sample size
+        fp = tf.logical_and(tf.equal(y_true, False), tf.equal(y_pred, True))
+        fp = tf.reduce_sum(tf.cast(fp, self.dtype))
+        self._fp_tot.assign_add(fp)
+        fp_rate = self._fp_tot / self._n_samples
+
+        # bkg rate: false positive rate times total number of triggers over obs time
+        n_b = fp_rate * self._N_tot / self._t_obs
+
+        # significance
+        sig = 2. * (tf.sqrt(n_b + self._e_d * efficiency * self._n_s) - tf.sqrt(n_b)) * tf.sqrt(self._t_obs)
+
+        self.significance.assign(sig)
+
+    def result(self):
+        return self.significance
+
+    def reset_states(self):
+        # reset all values after each epoch
+        self.significance.assign(0.)
+        self._fp_tot.assign(0.)
+        self._tp_tot.assign(0.)
+        self._n_samples.assign(0.)
+        self._n_true_samples.assign(0.)
+
+
+def learning_curve(model, X, y,
+                   sample_splits=[0.1, 0.3, 0.5, 0.7, 1.],
+                   iter_per_split=5,
+                   restore_weights=True,
+                   epochs=20,
+                   normalizer=None,
+                   batch_size=500,
+                   random_state=None,
+                   stratify=True):
+    """
+    Compute the learning curve
+
+    Parameters
+    ----------
+    model: keras model
+        The model to compute the learning curve for
+    X: array-like
+        the data (should be shuffled!)
+    y: array-like
+        class labels
+    sample_splits: array-like
+        fraction of data to use to compute learning curve
+    iter_per_splits: int
+        number of iterations for each fraction of the data
+        Data will be split using Kfolds with Stratification
+    restore_weights: bool
+        restore weights after each iteration
+    epochs=20
+        Number of epochs the model will be trained for
+    normalizer: keras normalizer or None
+        normalizer to normalize data
+
+    Returns
+    -------
+    """
+    # save weights
+    weights = os.path.join(tempfile.mkdtemp(), f'weights')
+    model.save_weights(weights)
+
+    sample_sizes = []
+    results_test = {}
+    results_train = {}
+
+    for i_frac, fraction in enumerate(sample_splits):
+        sample_size = int(y.size * fraction)
+        sample_sizes.append(sample_size)
+
+        sd = SplitData(X[:sample_size], y[:sample_size],
+                       n_splits=iter_per_split,
+                       stratify=stratify,
+                       random_state=random_state)
+
+        for i in range(iter_per_split):
+
+            # restore initial weights
+            if restore_weights:
+                model.load_weights(weights)
+
+            X_train, X_test, y_train, y_test = sd.get_split(i)
+
+            if normalizer is not None:
+                normalizer.adapt(X_train)
+                X_train = normalizer(X_train)
+                X_test = normalizer(X_test)
+
+            history = train_model(model, X_train, y_train,
+                                  epochs=epochs,
+                                  batch_size=batch_size,
+                                  X_val=X_test,
+                                  y_val=y_test)
+
+            result_train = model.evaluate(X_train, y_train, batch_size=batch_size, verbose=0, return_dict=True)
+            result_test = model.evaluate(X_test, y_test, batch_size=batch_size, verbose=0, return_dict=True)
+            # save results
+            if not len(list(result_train.keys())) == len(list(results_train.keys())):
+                # first step in loop, set up dicts:
+                for k, v in result_train.items():
+                    results_train[k] = np.zeros((len(sample_splits), iter_per_split))
+                    results_train[k][i_frac, i] = v
+
+                    results_test[k] = np.zeros((len(sample_splits), iter_per_split))
+                    results_test[k][i_frac, i] = result_test[k]
+            else:
+                for k, v in result_train.items():
+                    results_train[k][i_frac, i] = v
+                    results_test[k][i_frac, i] = result_test[k]
+
+    # restore initial weights
+    if restore_weights:
+        model.load_weights(weights)
+
+    return sample_sizes, results_train, results_test

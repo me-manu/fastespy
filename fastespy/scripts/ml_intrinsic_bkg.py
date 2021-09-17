@@ -241,8 +241,8 @@ if __name__ == "__main__":
             n_b=n_b,
             mus=mus,
             alpha=alpha,
-            fix_discrete_n_pathology=False,
-            n_jobs=args.n_jobs)
+            fix_discrete_n_pathology=False)
+            #n_jobs=args.n_jobs)
 
         lower_limits = lower_limits_mu[:, 0]
         upper_limits = upper_limits_mu[:, 0]

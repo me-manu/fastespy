@@ -1,5 +1,6 @@
 from __future__ import absolute_import, division, print_function
 from tensorflow import keras
+import time
 import numpy as np
 
 metrics = (
@@ -117,3 +118,56 @@ def initial_output_bias(y_train):
     initial_loss = -p0 * np.log(p0) - (1. - p0) * np.log(1. - p0)
     return initial_bias, initial_loss
 
+
+def train_model(model, X_train, y_train, X_val=None, y_val=None, epochs=200, batch_size=2048, **kwargs):
+    """
+    Train model
+
+    Parameters
+    ----------
+    model: keras model
+        the model to fit
+    X_train: array-like
+        training data
+    y_train: array-like
+        training labels
+    X_val: None or array-like
+        validation data
+    y_val: None or array-like
+        validation labels
+    epochs: int
+        training epocks
+    batch_size: int
+        batch size
+    kwargs: dict
+        addtional kwargs passed to fit funtion
+    """
+    kwargs.setdefault("verbose", 0)
+
+    # early stopping if loss of validation set does not improve
+    early_stopping = keras.callbacks.EarlyStopping(
+        monitor='val_loss',
+        verbose=1,
+        patience=10,
+        mode='min',
+        restore_best_weights=True)
+
+    if X_val is None or y_val is None:
+        valdation_data = None
+    else:
+        validation_data = (X_val, y_val)
+
+    t0 = time.time()
+    history = model.fit(
+        X_train,
+        y_train,
+        batch_size=batch_size,
+        epochs=epochs,
+        validation_data=validation_data,
+        **kwargs
+    )
+    t1 = time.time()
+    if kwargs['verbose']:
+        print("training took {0:.2f}s".format(t1 - t0))
+
+    return history
