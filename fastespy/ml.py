@@ -67,6 +67,35 @@ param_grid_coarse = dict(
         }
 )
 
+# grid for class weights
+weights = np.linspace(0.0, 0.99, 100)
+#class_weights = [None, "balanced"] + [{0: x, 1: 1. - x} for x in weights]
+class_weights = [{0: x, 1: 1. - x} for x in weights]
+
+param_grid_class_weights = dict(
+    dt={'ccp_alpha': [0.],
+        'min_samples_split': [2],
+        'max_depth': [5],
+        'class_weight': class_weights
+        },
+    bdt={'n_estimators': [500.],
+         'learning_rate': [0.1],
+         'max_depth': [2],
+         'class_weight': class_weights
+         },
+
+    rf={'n_estimators': [300],
+        'max_features': [1],
+        'min_samples_split': [2],
+        'class_weight': class_weights
+        },
+    mlp={
+        'hidden_layer_sizes': ((100, 100, 100, 100)),
+        'alpha': [1e-3],
+        'class_weight': class_weights
+    }
+)
+
 default_pars = dict(
     dt={'criterion': 'gini',
         'min_samples_leaf': 1,
@@ -433,6 +462,7 @@ class MLHyperParTuning(object):
                             scoring=None,
                             param_grid_user=None,
                             coarse_grid=False,
+                            class_weight_grid=False,
                             n_jobs=8,
                             verbose=1,
                             random_state=None):
@@ -456,6 +486,10 @@ class MLHyperParTuning(object):
         coarse_grid: bool
             if True and param_grid_user not given, use hard coded coarse grid
 
+        class_weight_grid: bool
+            if True and param_grid_user not given, use hard coded grid for class weight optimization
+            (takes precedence over coarse grid)
+
         n_jobs: int
             number of parallel jobs
 
@@ -467,7 +501,16 @@ class MLHyperParTuning(object):
         """
 
         if param_grid_user is None:
-            if coarse_grid:
+            if class_weight_grid:
+                self._grid = copy.deepcopy(param_grid_class_weights[classifier])
+                # append the "balanced" weighting
+                self._grid['class_weight'].append({})
+                for label in np.unique(self._y_train):
+                    m = self._y_train == label
+                    w = self._y_train.size / np.unique(self._y_train).size / self._y_train[m].size
+                    self._grid['class_weight'][-1][label] = w
+
+            elif coarse_grid:
                 self._grid = param_grid_coarse[classifier]
             else:
                 self._grid = param_grid[classifier]
@@ -582,6 +625,7 @@ class MLHyperParTuning(object):
             self._results['bkg_pred_{0:s}'.format(k)] = dict()
             self._results['tp_efficiency_{0:s}'.format(k)] = dict()
             self._results['score_{0:s}'.format(k)] = dict()
+            self._results['thr_sig_bkg_eff_{0:s}'.format(k)] = dict()
         self._y_pred_test = dict()
         self._y_pred_train = dict()
         self._prob_test = dict()
@@ -617,7 +661,8 @@ class MLHyperParTuning(object):
                 sig, bkg, eff = np.zeros(thresholds.size), np.zeros(thresholds.size), np.zeros(thresholds.size)
                 for j, thr_j in enumerate(thresholds):
                     sig[j], bkg[j], eff[j] = get_sig_bkg_rate_eff(self._y_test if i else self._y_train,
-                                                                  self._prob_test[k][:,1] if i else self._prob_train[k],
+                                                                  self._prob_test[k][:, 1] if i else
+                                                                      self._prob_train[k][:, 1],
                                                                   self._y_train.size + self._y_test.size,
                                                                   self._t_obs, thr_j)
 
@@ -747,8 +792,10 @@ class MLHyperParTuning(object):
     @staticmethod
     def plot_parameter_profiles(results, scoring, classifier, path=PosixPath("./")):
         """Plot the parameter profiles for each scorer"""
-        if not path.exists():
-            path.mkdir(parents=True)
+
+        if path is not None:
+            if not path.exists():
+                path.mkdir(parents=True)
 
         for i, score in enumerate(scoring):
             plt.figure(figsize=(4 * 3, 4))
@@ -761,6 +808,8 @@ class MLHyperParTuning(object):
                     x = np.unique([np.sum(results['gs_cv'][f'param_{par}'].data[i]) for i in
                                    range(results['gs_cv'][f'param_{par}'].data.size)])
 
+                elif par == 'class_weight':
+                    x = np.array([x[0] for x in results['gs_cv'][f'param_{par}'].data])
                 else:
                     x = np.unique(results['gs_cv'][f'param_{par}'].data).astype(np.float)
 
@@ -794,8 +843,11 @@ class MLHyperParTuning(object):
                 ax.grid()
 
             plt.subplots_adjust(wspace=0.1)
-            plt.savefig(path / f"parameter_profiles_{score}_{classifier}.png", dpi=150)
-        plt.close("all")
+            if path is not None:
+                plt.savefig(path / f"parameter_profiles_{score}_{classifier}.png", dpi=150)
+
+        if path is not None:
+            plt.close("all")
 
     @staticmethod
     def plot_misidentified_time_lines(result,
