@@ -7,6 +7,7 @@ from pathlib import PosixPath
 from sklearn.model_selection import StratifiedKFold
 from fastespy.readpydata import convert_data_to_ML_format
 from fastespy.ml import MLHyperParTuning
+from fastespy import ml
 from fastespy import feldman_cousins as fc
 from fastespy.analysis import init_logging
 
@@ -106,6 +107,159 @@ def load_data(files, feature_names, light_cleaning_cuts={}):
     return result, data, t_tot_hrs
 
 
+def run_hyper_par_opt(X, y,
+                      idx_train,
+                      idx_test,
+                      feature_names,
+                      classifier,
+                      param_grid,
+                      default_pars={},
+                      t_tot_hrs=500.,
+                      data=None,
+                      kfolds=5,
+                      classifier_name="clf",
+                      random_state=42,
+                      use_pca=False,
+                      out_path=PosixPath("./"),
+                      n_jobs=8):
+
+    ml_tune = MLHyperParTuning(X[idx_train], y[idx_train],
+                               X_test=X[idx_test],
+                               y_test=y[idx_test],
+                               idx_test=idx_test,
+                               valid_fraction=1. / kfolds,
+                               stratify=True,
+                               random_state=random_state,
+                               n_splits=kfolds)
+    ml_tune.scale_data()
+    if use_pca:
+        logging.info("Transforming data using PCA")
+        ml_tune.transform_data_pca()
+
+    ml_tune.make_sig_scorer(t_obs=t_tot_hrs * 3600.)
+    ml_tune.perform_grid_search(classifier=classifier,
+                                default_pars=default_pars,
+                                param_grid=param_grid,
+                                refit='Significance',
+                                n_jobs=n_jobs)
+    # output plots
+    ml_tune.plot_confusion_matrix(ml_tune.results, ml_tune.scoring, path=out_path, classifier=classifier_name)
+    ml_tune.plot_learning_curve(ml_tune.results, path=out_path, classifier=classifier_name)
+    # generate results dict
+    results = ml_tune.make_result_dict()
+    if data is not None:
+        ml_tune.plot_misidentified_time_lines(results,
+                                              scorer="Significance",
+                                              data_time=data['time'],
+                                              data_voltage=data['data'],
+                                              X=X,
+                                              feature_names=feature_names,
+                                              classifier=classifier_name,
+                                              path=out_path
+                                              )
+    # output performance
+    logging.info("Printing performance:")
+    ml_tune.print_performance_report(ml_tune.results, ml_tune.scoring, ml_tune.t_obs)
+    # Add Feldman & Cousins confidence interval for dark current rate
+    logging.info("Running Feldman & Cousins confidence interval estimation for dark current")
+    n_b = 0
+    n_obs = np.arange(ml_tune.results['confusion_matrix_test']['Significance'][0, 1] * 5)
+    mus = np.linspace(0, ml_tune.results['confusion_matrix_test']['Significance'][0, 1] * 3, 2401)
+    alpha = 0.9
+    lower_limits_mu, upper_limits_mu = fc.poissonian_feldman_cousins_interval(
+        n_obs=n_obs,
+        n_b=n_b,
+        mus=mus,
+        alpha=alpha,
+        fix_discrete_n_pathology=False)
+    # n_jobs=args.n_jobs)
+    lower_limits = lower_limits_mu[:, 0]
+    upper_limits = upper_limits_mu[:, 0]
+    # add F&C result to result dict
+    results['dark_current'] = {}
+    for k in ml_tune.scoring.keys():
+        results['dark_current'][k] = np.array([
+            lower_limits[ml_tune.results['confusion_matrix_test']['Significance'][0, 1]] * (
+                    ml_tune.y_test.size + ml_tune.y_train.size) / ml_tune.y_test.size,
+            ml_tune.results['bkg_pred_test']['Significance'],
+            upper_limits[ml_tune.results['confusion_matrix_test']['Significance'][0, 1]] * (
+                    ml_tune.y_test.size + ml_tune.y_train.size) / ml_tune.y_test.size
+        ]) / ml_tune.t_obs
+        logging.info("dark current {0:s}: {1}".format(k, results['dark_current'][k]))
+    return results
+
+
+def run(X, y,
+        feature_names,
+        classifier,
+        param_grid,
+        default_pars={},
+        t_tot_hrs=500.,
+        data=None,
+        kfolds=5,
+        classifier_name="clf",
+        out_dir=PosixPath("./"),
+        random_state=42,
+        log_data=False,
+        use_pca=False,
+        n_jobs=8):
+    """
+    Run the hyper-parameter tuning and generate analysis plots
+
+    Parameters
+    ----------
+    X
+    y
+    feature_names
+    classifier
+    default_pars
+    param_grid
+    t_tot_hrs
+    data
+    kfolds
+    classifier_name
+    out_dir
+    random_state
+    log_data
+    use_pca
+    n_jobs
+
+    """
+
+    if log_data:
+        logging.info("Transforming data to log space")
+        X, y = MLHyperParTuning.transform_data_log(X, y, feature_names)
+
+    # perform stratified K fold
+    skf = StratifiedKFold(n_splits=kfolds, random_state=random_state, shuffle=True)
+    skf.get_n_splits(X, y)
+    # perform the hyper parameter optimization
+    for i, (train_idx, test_idx) in enumerate(skf.split(X, y)):
+
+        logging.info("Running optimization for split {0:n} / {1:n}".format(i + 1, kfolds))
+        out_path = out_dir / "{0:05n}".format(i + 1)
+        if not out_path.exists():
+            out_path.mkdir(parents=True)
+
+        results = run_hyper_par_opt(X, y,
+                                    idx_train=train_idx,
+                                    idx_test=test_idx,
+                                    feature_names=feature_names,
+                                    classifier=classifier,
+                                    param_grid=param_grid,
+                                    default_pars=default_pars,
+                                    t_tot_hrs=t_tot_hrs,
+                                    data=data,
+                                    kfolds=kfolds,
+                                    classifier_name=classifier_name,
+                                    random_state=random_state,
+                                    use_pca=use_pca,
+                                    out_path=out_path,
+                                    n_jobs=n_jobs)
+
+        np.save(out_path / f"r{classifier_name}_cleaned_reduced.npy", results)
+
+
 if __name__ == "__main__":
     usage = "usage: %(prog)s -i indir -o outdir "
     description = "Perform a hyper parameter optimization for machine learning on pulse fit results"
@@ -171,93 +325,27 @@ if __name__ == "__main__":
                                      feature_names,
                                      bkg_type=0,
                                      signal_type=1)
-    if args.log_data:
-        logging.info("Transforming data to log space")
-        X, y = MLHyperParTuning.transform_data_log(X, y, feature_names)
+    # define grid and classifier
+    default_pars = ml.default_pars[args.classifier]
+    if args.coarse_grid:
+        param_grid = ml.param_grid_coarse[args.classifier]
+    else:
+        param_grid = ml.param_grid[args.classifier]
 
-    # perform stratified K fold
-    skf = StratifiedKFold(n_splits=args.kfolds, random_state=args.random_state, shuffle=True)
-    skf.get_n_splits(X, y)
+    classifier = ml.clf[args.classifier](random_state=args.random_state,
+                                         **default_pars)
 
-    # perform the hyper parameter optimazition
-    for i, (train_idx, test_idx) in enumerate(skf.split(X, y)):
-
-        logging.info(" Running optimization for split {0:n} / {1:n}".format(i + 1, args.kfolds))
-
-        ml = MLHyperParTuning(X[train_idx], y[train_idx],
-                              X_test=X[test_idx],
-                              y_test=y[test_idx],
-                              idx_test=test_idx,
-                              valid_fraction=1. / args.kfolds,
-                              stratify=True,
-                              random_state=args.random_state,
-                              n_splits=args.kfolds)
-        ml.scale_data()
-
-        if args.use_pca:
-            logging.info("Transforming data using PCA")
-            ml.transform_data_pca()
-
-        ml.make_sig_scorer(t_obs=t_tot_hrs * 3600.)
-
-        ml.perform_grid_search(classifier=args.classifier,
-                               refit='Significance',
-                               coarse_grid=args.coarse_grid,
-                               n_jobs=args.n_jobs)
-
-        out_path = out_dir / "{0:05n}".format(i + 1)
-        if not out_path.exists():
-            out_path.mkdir(parents=True)
-
-        # output plots
-        ml.plot_confusion_matrix(ml.results, ml.scoring, path=out_path, classifier=ml.classifier)
-        ml.plot_learning_curve(ml.results, path=out_path, classifier=ml.classifier)
-
-        # generate results dict
-        results = ml.make_result_dict()
-
-        ml.plot_misidentified_time_lines(results,
-                                         scorer="Significance",
-                                         data_time=data['time'],
-                                         data_voltage=data['data'],
-                                         X=X,
-                                         feature_names=feature_names,
-                                         path=out_path
-                                         )
-
-        # output performance
-        logging.info("Printing performance:")
-        ml.print_performance_report(ml.results, ml.scoring, ml.t_obs)
-
-        # Add Feldman & Cousins confidence interval for dark current rate
-        logging.info("Running Feldman & Cousins confidence interval estimation for dark current")
-        n_b = 0
-        n_obs = np.arange(ml.results['confusion_matrix_test']['Significance'][0, 1] * 5)
-        mus = np.linspace(0, ml.results['confusion_matrix_test']['Significance'][0, 1] * 3, 2401)
-        alpha = 0.9
-
-        lower_limits_mu, upper_limits_mu = fc.poissonian_feldman_cousins_interval(
-            n_obs=n_obs,
-            n_b=n_b,
-            mus=mus,
-            alpha=alpha,
-            fix_discrete_n_pathology=False)
-            #n_jobs=args.n_jobs)
-
-        lower_limits = lower_limits_mu[:, 0]
-        upper_limits = upper_limits_mu[:, 0]
-
-        # add F&C result to result dict
-        results['dark_current'] = {}
-        for k in ml.scoring.keys():
-            results['dark_current'][k] = np.array([
-                lower_limits[ml.results['confusion_matrix_test']['Significance'][0, 1]] * (
-                            ml.y_test.size + ml.y_train.size) / ml.y_test.size,
-                ml.results['bkg_pred_test']['Significance'],
-                upper_limits[ml.results['confusion_matrix_test']['Significance'][0, 1]] * (
-                            ml.y_test.size + ml.y_train.size) / ml.y_test.size
-            ]) / ml.t_obs
-            logging.info("dark current {0:s}: {1}".format(k, results['dark_current'][k]))
-
-        np.save(out_path / f"r{ml.classifier}_cleaned_reduced.npy", results)
-
+    run(X, y,
+        feature_names=feature_names,
+        classifier=classifier,
+        default_pars=default_pars,
+        param_grid=param_grid,
+        t_tot_hrs=t_tot_hrs,
+        data=data,
+        kfolds=args.kfolds,
+        classifier_name=args.classifier,
+        random_state=args.random_state,
+        log_data=args.log_data,
+        use_pca=args.use_pca,
+        out_dir=out_dir,
+        n_jobs=args.n_jobs)
