@@ -458,10 +458,11 @@ class MLHyperParTuning(object):
                                       t_obs=t_obs,
                                       N_tot=self._y_test.size + self._y_train.size)
 
-    def perform_grid_search(self, classifier, refit,
+    def perform_grid_search(self, classifier,
+                            default_pars,
+                            param_grid,
+                            refit,
                             scoring=None,
-                            param_grid_user=None,
-                            coarse_grid=False,
                             class_weight_grid=False,
                             n_jobs=8,
                             verbose=1,
@@ -471,17 +472,20 @@ class MLHyperParTuning(object):
 
         Parameters
         ----------
-        classifier: str
-            name of classifier
+        classifier: sklearn classifier object
+            The sklearn classifier
+
+        default_pars: dict
+            dictionary with default parameters for the classifier
+
+        param_grid: dict
+            dictionary with parameters for the grid search
 
         refit: str
             Name of scorer used for refitting final classifier
 
         scoring: str or dict or None
             Scorers for which grid search will be performed. If None, use hard coded scoring dict.
-
-        param_grid_user: dict or None
-            Parameter grid for grid search. If None, use hard coded grids
 
         coarse_grid: bool
             if True and param_grid_user not given, use hard coded coarse grid
@@ -500,22 +504,16 @@ class MLHyperParTuning(object):
             random state to use
         """
 
-        if param_grid_user is None:
-            if class_weight_grid:
-                self._grid = copy.deepcopy(param_grid_class_weights[classifier])
-                # append the "balanced" weighting
-                self._grid['class_weight'].append({})
-                for label in np.unique(self._y_train):
-                    m = self._y_train == label
-                    w = self._y_train.size / np.unique(self._y_train).size / self._y_train[m].size
-                    self._grid['class_weight'][-1][label] = w
-
-            elif coarse_grid:
-                self._grid = param_grid_coarse[classifier]
-            else:
-                self._grid = param_grid[classifier]
+        if class_weight_grid:
+            self._grid = copy.deepcopy(param_grid)
+            # append the "balanced" weighting
+            self._grid['class_weight'].append({})
+            for label in np.unique(self._y_train):
+                m = self._y_train == label
+                w = self._y_train.size / np.unique(self._y_train).size / self._y_train[m].size
+                self._grid['class_weight'][-1][label] = w
         else:
-            self._grid = param_grid_user
+            self._grid = param_grid
 
         self._classifier = classifier
 
@@ -534,8 +532,7 @@ class MLHyperParTuning(object):
         else:
             self._scoring = scoring
 
-        gs = GridSearchCV(clf[classifier](random_state=random_state,
-                                          **default_pars[classifier]),
+        gs = GridSearchCV(self._classifier,
                           param_grid=self._grid,
                           scoring=self._scoring,
                           refit=refit,
@@ -556,7 +553,7 @@ class MLHyperParTuning(object):
         self._profile_params()
 
         print("Refitting on whole test data set and computing learning curve and confusion matrix")
-        self._post_processing(n_jobs=n_jobs)
+        self._post_processing(default_pars, n_jobs=n_jobs)
 
     def _profile_params(self):
         """
@@ -610,7 +607,7 @@ class MLHyperParTuning(object):
                                         mean_train=mean_best_train,
                                         std_train=std_best_train)
 
-    def _post_processing(self, n_jobs=8, step=0.002):
+    def _post_processing(self, default_pars, n_jobs=8, step=0.002):
         """
         Retrain the classifier with best parameter set on whole
         training sample for each scorer, compute the learning curve
@@ -640,11 +637,12 @@ class MLHyperParTuning(object):
 
             # get the best index for parameters
             best_index = np.nonzero(self._results['gs_cv'][f'rank_test_{k:s}'] == 1)[0][0]
-            self._results['best_params'][k] = copy.deepcopy(default_pars[self._classifier])
+            self._results['best_params'][k] = copy.deepcopy(default_pars)
             self._results['best_params'][k].update(self._results['gs_cv']['params'][best_index])
 
             # init an estimator with the best parameters
-            best_clf = clf[self._classifier](random_state=42, **self._results['best_params'][k])
+            #best_clf = self._classifier(random_state=42, **self._results['best_params'][k])
+            best_clf = self._classifier.set_params(**self._results['best_params'][k])
             best_clf.fit(self._X_train, self._y_train)
 
             self._y_pred_test[k] = best_clf.predict(self._X_test)
@@ -855,6 +853,7 @@ class MLHyperParTuning(object):
                                       data_time,
                                       data_voltage,
                                       X=None,
+                                      classifier="",
                                       feature_names=None,
                                       path=PosixPath("./"),
                                       plot_false_positive=True,
@@ -891,7 +890,7 @@ class MLHyperParTuning(object):
             ax.legend(fontsize='small', title=title_string, loc='lower right')
             iplot += 1
 
-        plt.suptitle(f"{result['classifier']:s} {scorer:s}", fontsize='xx-large')
+        plt.suptitle(f"{classifier:s} {scorer:s}", fontsize='xx-large')
         plt.subplots_adjust(top=0.95)
 
         if not path.exists():
@@ -899,9 +898,9 @@ class MLHyperParTuning(object):
 
         if save_plot:
             if plot_false_positive:
-                plt.savefig(path / f"misid_events_fp_{scorer:s}_{result['classifier']}.png", dpi=150)
+                plt.savefig(path / f"misid_events_fp_{scorer:s}_{classifier}.png", dpi=150)
             else:
-                plt.savefig(path / f"misid_events_fn_{scorer:s}_{result['classifier']}.png", dpi=150)
+                plt.savefig(path / f"misid_events_fn_{scorer:s}_{classifier}.png", dpi=150)
             plt.close("all")
 
     @staticmethod
@@ -947,7 +946,6 @@ class MLHyperParTuning(object):
         result['idx_test'] = self._idx_test
         result['scoring'] = list(self._scoring.keys())
         result['grid'] = self._grid
-        result['classifier'] = self._classifier
         result['t_obs'] = self._t_obs
         return result
 
