@@ -117,7 +117,10 @@ if __name__ == "__main__":
     parser.add_argument('--n_jobs', help='Number of processors to use', type=int, default=1)
     parser.add_argument('--random_state', help='Random state', type=int, default=42)
     parser.add_argument('--coarse-grid', action="store_true",
-                        help='Use a coarse grid for hyper parameter optimazation',
+                        help='Use a coarse grid for hyper parameter optimization',
+                        )
+    parser.add_argument('--class-weight-grid', action="store_true",
+                        help='Use a grid for class weight optimization',
                         )
     parser.add_argument('--log-data', action="store_true",
                         help='Transform data into log space',
@@ -202,6 +205,7 @@ if __name__ == "__main__":
 
         ml.perform_grid_search(classifier=args.classifier,
                                refit='Significance',
+                               class_weight_grid=args.class_weight_grid,
                                coarse_grid=args.coarse_grid,
                                n_jobs=args.n_jobs)
 
