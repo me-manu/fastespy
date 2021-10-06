@@ -3,16 +3,12 @@ tests/__pycache__/
 __pycache__/
 *.py[cod]
 *$py.class
-.idea/
 
 # ignore stuff created by example notebooks
-fastespy/notebooks/*.png
-fastespy/notebooks/*.pdf
-fastespy/notebooks/*.fits
-fastespy/notebooks/.DS_Store
-fastespy/notebooks/*.yaml
-fastespy/notebooks/plots
-fastespy/notebooks/*.npy
+notebooks/*.png
+notebooks/*.pdf
+notebooks/*.fits
+notebooks/.DS_Store
 
 # C extensions
 *.so
