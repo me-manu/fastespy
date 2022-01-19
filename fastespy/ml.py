@@ -673,6 +673,7 @@ class MLHyperParTuning(object):
                                                                      train_sizes=train_sizes,
                                                                      cv=self._kf,
                                                                      verbose=1,
+                                                                     scoring=scorer,
                                                                      n_jobs=n_jobs)
 
             self._results['learning_curve'][k] = (train_sizes, train_scores, valid_scores)
@@ -870,6 +871,9 @@ class MLHyperParTuning(object):
             m_misid = (result['y_test'] == 1) & (result['y_pred_test'][scorer] == 0)
 
         n_misid = np.sum(m_misid)
+
+        if not n_misid:
+            print("No misidentified pulses found, returning.")
 
         plt.figure(figsize=(6 * 4, n_misid))
         iplot = 1

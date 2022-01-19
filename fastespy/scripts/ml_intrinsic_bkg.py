@@ -75,7 +75,7 @@ def load_data(files, feature_names, light_cleaning_cuts={}):
             data['time'].append(x[i]['time'])
             data['data'].append(x[i]['data'])
 
-            if 'intrinsic' in str(f):
+            if 'intrinsic' in str(f) or 'extrinsic' in str(f):
                 if x[i]['end time in hrs'] > t_stop:
                     t_stop = x[i]['end time in hrs']
                 if x[i]['start time in hrs'] < t_start:
