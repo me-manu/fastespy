@@ -3,11 +3,13 @@ import time
 import copy
 import numpy as np
 import matplotlib.pyplot as plt
+import logging
+from .feldman_cousins import poissonian_feldman_cousins_interval
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import learning_curve
-from sklearn.metrics import get_scorer, make_scorer, fbeta_score
+from sklearn.metrics import get_scorer, make_scorer
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -115,40 +117,6 @@ default_pars = dict(
          }
 )
 
-def plot_metric(history, ax=None, metric="loss", **kwargs):
-    """
-    Plot the evolution of a classification metric
-    with epocks
-
-    Parameters
-    ----------
-    history: keras history object
-        the classification history
-
-    ax: matplotlib axes object
-        axes for plotting
-
-    metric: string
-        name of metric to plot
-
-    kwargs: dict
-    additional kwargs passed to plot
-
-    Returns
-    -------
-    matplotlib axes object
-    """
-    if ax is None:
-        ax = plt.gca()
-
-    label = kwargs.pop('label', '')
-    ax.semilogy(history.epoch, history.history[metric], label='Train ' + label, **kwargs)
-
-    kwargs.pop('ls', None)
-    ax.semilogy(history.epoch, history.history[f'val_{metric}'], label='Val ' + label, ls='--', **kwargs)
-    ax.set_xlabel('Epoch')
-    ax.set_ylabel(metric)
-    return ax
 
 def get_tp_fp_fn(y_true, y_pred, thr=0.5):
     """
@@ -716,7 +684,7 @@ class MLHyperParTuning(object):
         return bkg_rate, tp_efficiency
 
     @staticmethod
-    def plot_confusion_matrix(results, scoring, classifier="", path=PosixPath("./")):
+    def plot_confusion_matrix(results, scoring, classifier="", path=PosixPath("../")):
         """
         Plot the confusion matrix for each scorer
         """
@@ -733,7 +701,7 @@ class MLHyperParTuning(object):
         plt.close("all")
 
     @staticmethod
-    def plot_learning_curve(results, classifier="", select_score=None, path=PosixPath("./")):
+    def plot_learning_curve(results, classifier="", select_score=None, path=PosixPath("../")):
         """
         Plot the learning curve
 
@@ -789,7 +757,7 @@ class MLHyperParTuning(object):
         plt.close("all")
 
     @staticmethod
-    def plot_parameter_profiles(results, scoring, classifier, path=PosixPath("./")):
+    def plot_parameter_profiles(results, scoring, classifier, path=PosixPath("../")):
         """Plot the parameter profiles for each scorer"""
 
         if path is not None:
@@ -856,7 +824,7 @@ class MLHyperParTuning(object):
                                       X=None,
                                       classifier="",
                                       feature_names=None,
-                                      path=PosixPath("./"),
+                                      path=PosixPath("../"),
                                       plot_false_positive=True,
                                       save_plot=True
                                       ):
@@ -954,3 +922,207 @@ class MLHyperParTuning(object):
         return result
 
 
+def run_hyper_par_opt(X, y,
+                      idx_train,
+                      idx_test,
+                      feature_names,
+                      classifier,
+                      param_grid,
+                      default_pars={},
+                      t_tot_hrs=500.,
+                      data=None,
+                      kfolds=5,
+                      classifier_name="clf",
+                      random_state=42,
+                      use_pca=False,
+                      out_path=PosixPath("../"),
+                      n_jobs=8):
+    """
+    Run the hyper-parameter tuning for one split into validation and training data by splitting
+    the training data again with K-fold cross validation.
+
+    Parameters
+    ----------
+    X: array-like
+        The input data in format [n_samples, n_features]
+    y: array-like
+        The class labels in format [n_samples]
+    idx_train: array-like
+        list of indeces for samples from X to use for training
+    idx_test: array-like
+        list of indeces for samples from X to use for validation
+    feature_names: array of strings
+        Names of features
+    classifier: sklearn classifier object
+        The sklearn classifier
+    param_grid: dict
+        dictionary with parameters for the grid search
+    default_pars: dict
+        dictionary with default parameters for the classifier
+    t_tot_hrs: float
+        total number of hours of data taking
+    data: dict
+        dict with raw data (to plot the misidentified time lines)
+    kfolds: int
+        number of K folds
+    classifier_name: str
+        name of classifier
+    out_path: PosixPath object
+        The output dir
+    random_state: None, int, or random state
+        the random state / seed to use
+    use_pca: bool
+        if true, apply a PCA transform
+    n_jobs: int
+        number of cores to use
+    """
+
+    ml_tune = MLHyperParTuning(X[idx_train], y[idx_train],
+                               X_test=X[idx_test],
+                               y_test=y[idx_test],
+                               idx_test=idx_test,
+                               valid_fraction=1. / kfolds,
+                               stratify=True,
+                               random_state=random_state,
+                               n_splits=kfolds)
+    ml_tune.scale_data()
+    if use_pca:
+        logging.info("Transforming data using PCA")
+        ml_tune.transform_data_pca()
+
+    ml_tune.make_sig_scorer(t_obs=t_tot_hrs * 3600.)
+    ml_tune.perform_grid_search(classifier=classifier,
+                                default_pars=default_pars,
+                                param_grid=param_grid,
+                                refit='Significance',
+                                n_jobs=n_jobs)
+    # output plots
+    ml_tune.plot_confusion_matrix(ml_tune.results, ml_tune.scoring, path=out_path, classifier=classifier_name)
+    ml_tune.plot_learning_curve(ml_tune.results, path=out_path, classifier=classifier_name)
+    # generate results dict
+    results = ml_tune.make_result_dict()
+    if data is not None:
+        ml_tune.plot_misidentified_time_lines(results,
+                                              scorer="Significance",
+                                              data_time=data['time'],
+                                              data_voltage=data['data'],
+                                              X=X,
+                                              feature_names=feature_names,
+                                              classifier=classifier_name,
+                                              path=out_path
+                                              )
+    # output performance
+    logging.info("Printing performance:")
+    ml_tune.print_performance_report(ml_tune.results, ml_tune.scoring, ml_tune.t_obs)
+    # Add Feldman & Cousins confidence interval for dark current rate
+    logging.info("Running Feldman & Cousins confidence interval estimation for dark current")
+    n_b = 0
+    n_obs = np.arange(ml_tune.results['confusion_matrix_test']['Significance'][0, 1] * 5)
+    mus = np.linspace(0, ml_tune.results['confusion_matrix_test']['Significance'][0, 1] * 3, 2401)
+    alpha = 0.9
+    lower_limits_mu, upper_limits_mu = poissonian_feldman_cousins_interval(
+        n_obs=n_obs,
+        n_b=n_b,
+        mus=mus,
+        alpha=alpha,
+        fix_discrete_n_pathology=False)
+    # n_jobs=args.n_jobs)
+    lower_limits = lower_limits_mu[:, 0]
+    upper_limits = upper_limits_mu[:, 0]
+    # add F&C result to result dict
+    results['dark_current'] = {}
+    for k in ml_tune.scoring.keys():
+        results['dark_current'][k] = np.array([
+            lower_limits[ml_tune.results['confusion_matrix_test']['Significance'][0, 1]] * (
+                    ml_tune.y_test.size + ml_tune.y_train.size) / ml_tune.y_test.size,
+            ml_tune.results['bkg_pred_test']['Significance'],
+            upper_limits[ml_tune.results['confusion_matrix_test']['Significance'][0, 1]] * (
+                    ml_tune.y_test.size + ml_tune.y_train.size) / ml_tune.y_test.size
+        ]) / ml_tune.t_obs
+        logging.info("dark current {0:s}: {1}".format(k, results['dark_current'][k]))
+    return results
+
+
+def run_hyper_par_opt_all_folds(X, y,
+                                feature_names,
+                                classifier,
+                                param_grid,
+                                default_pars={},
+                                t_tot_hrs=500.,
+                                data=None,
+                                kfolds=5,
+                                classifier_name="clf",
+                                out_dir=PosixPath("../"),
+                                random_state=42,
+                                log_data=False,
+                                use_pca=False,
+                                n_jobs=8):
+    """
+    Run the hyper-parameter tuning over all k-folds and generate analysis plots
+
+    Parameters
+    ----------
+    X: array-like
+        The input data in format [n_samples, n_features]
+    y: array-like
+        The class labels in format [n_samples]
+    feature_names: array of strings
+        Names of features
+    classifier: sklearn classifier object
+        The sklearn classifier
+    default_pars: dict
+        dictionary with default parameters for the classifier
+    param_grid: dict
+        dictionary with parameters for the grid search
+    t_tot_hrs: float
+        total number of hours of data taking
+    data: dict
+        dict with raw data (to plot the misidentified time lines)
+    kfolds: int
+        number of K folds
+    classifier_name: str
+        name of classifier
+    out_dir: PosixPath object
+        The output dir
+    random_state: None, int, or random state
+        the random state / seed to use
+    log_data: bool
+        if true, log transform the data
+    use_pca: bool
+        if true, apply a PCA transform
+    n_jobs: int
+        number of cores to use
+    """
+
+    if log_data:
+        logging.info("Transforming data to log space")
+        X, y = MLHyperParTuning.transform_data_log(X, y, feature_names)
+
+    # perform stratified K fold
+    skf = StratifiedKFold(n_splits=kfolds, random_state=random_state, shuffle=True)
+    skf.get_n_splits(X, y)
+    # perform the hyper parameter optimization
+    for i, (train_idx, test_idx) in enumerate(skf.split(X, y)):
+
+        logging.info("Running optimization for split {0:n} / {1:n}".format(i + 1, kfolds))
+        out_path = out_dir / "{0:05n}".format(i + 1)
+        if not out_path.exists():
+            out_path.mkdir(parents=True)
+
+        results = run_hyper_par_opt(X, y,
+                                    idx_train=train_idx,
+                                    idx_test=test_idx,
+                                    feature_names=feature_names,
+                                    classifier=classifier,
+                                    param_grid=param_grid,
+                                    default_pars=default_pars,
+                                    t_tot_hrs=t_tot_hrs,
+                                    data=data,
+                                    kfolds=kfolds,
+                                    classifier_name=classifier_name,
+                                    random_state=random_state,
+                                    use_pca=use_pca,
+                                    out_path=out_path,
+                                    n_jobs=n_jobs)
+
+        np.save(out_path / f"r{classifier_name}_cleaned_reduced.npy", results)

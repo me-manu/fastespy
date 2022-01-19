@@ -1,8 +1,10 @@
 from __future__ import absolute_import, division, print_function
-from fastespy.functions import TimeLine
-from fastespy.analysis import derivative_filtered
+from .timeline.models import TimeLine
+from .timeline.processing import derivative_filtered
 import matplotlib
 import numpy as np
+from matplotlib import pyplot as plt
+
 matplotlib.use("agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -287,7 +289,6 @@ def plot_scatter_w_hist(x,y,
                         fig=None, ax_2d=None, ax_x=None, ax_y=None,
                         bins_x=100, bins_y=100,
                         scatter_kwargs={},
-                        add_cbar=False,
                         hist_x_kwargs={},
                         hist_y_kwargs={}):
     """
@@ -322,8 +323,6 @@ def plot_scatter_w_hist(x,y,
     ax_y.tick_params(labelleft=False)
 
     ax_2d.scatter(x, y, **scatter_kwargs)
-    if add_cbar:
-        plt.colorbar(c)
 
     ax_x.hist(x, bins=bins_x, **hist_x_kwargs)
     ax_y.hist(y, bins=bins_y, orientation='horizontal', **hist_y_kwargs)
@@ -332,3 +331,39 @@ def plot_scatter_w_hist(x,y,
     ax_y.set_ylim(ax_2d.get_ylim())
 
     return fig, ax_2d, ax_x, ax_y, bins_x, bins_y
+
+
+def plot_metric(history, ax=None, metric="loss", **kwargs):
+    """
+    Plot the evolution of a classification metric
+    with epocks
+
+    Parameters
+    ----------
+    history: keras history object
+        the classification history
+
+    ax: matplotlib axes object
+        axes for plotting
+
+    metric: string
+        name of metric to plot
+
+    kwargs: dict
+    additional kwargs passed to plot
+
+    Returns
+    -------
+    matplotlib axes object
+    """
+    if ax is None:
+        ax = plt.gca()
+
+    label = kwargs.pop('label', '')
+    ax.semilogy(history.epoch, history.history[metric], label='Train ' + label, **kwargs)
+
+    kwargs.pop('ls', None)
+    ax.semilogy(history.epoch, history.history[f'val_{metric}'], label='Val ' + label, ls='--', **kwargs)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel(metric)
+    return ax

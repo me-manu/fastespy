@@ -2,8 +2,8 @@ from __future__ import absolute_import, division, print_function
 import numpy as np
 from scipy.integrate import simps
 
-# the flare function
-def expflare(t,**kwargs):
+
+def expflare(t, **kwargs):
     """
     Exponential flare function adopted for TES time line
 

@@ -6,6 +6,8 @@ import pickle
 import bz2
 import logging
 import copy
+import tqdm
+from ..timeline.models import TimeLine
 
 
 def read_graph_py(directory, split = '-', checkroot = True, inputid = 'in', prefix = ''):
@@ -96,7 +98,6 @@ def read_fit_results_rikhav(path,
     -------
     Dict with fit results and list with feature names
     """
-    from .functions import TimeLine
 
     data_files = sorted(glob.glob(os.path.join(path, '*.npy')))
     if not len(data_files):
@@ -191,7 +192,6 @@ def read_fit_results_axel(path):
     -------
     Dict with fit results and list with feature names
     """
-    from .functions import TimeLine
 
     data_files = glob.glob(os.path.join(path, "*.npy"))
 
@@ -258,3 +258,98 @@ def convert_data_to_ML_format(result, features, bkg_type, signal_type):
     y[y_data[m] == signal_type] = 1
 
     return X, y
+
+
+def load_data_rikhav(files, feature_names, light_cleaning_cuts={}):
+    """
+    Load data from Rikhav's pulse fitting
+
+    Parameters
+    ----------
+    files: list
+        list of file names
+
+    feature_names: list
+        list of feature names to be used
+
+    light_cleaning_cuts: dict
+        dictionary with feature names as key and cleaning options to be used
+
+    Returns
+    -------
+    Tuple containing:
+        - Dictionary with fitting data
+        - Dictionary for raw data
+        - Float with total observation time
+    """
+
+    result = {'type': []}
+    t_tot_hrs = 0.
+    id_rejected = []
+    data = {"time": [], "data": []}
+    # loop through files
+    logging.info("Reading data")
+
+    for f in tqdm.tqdm(files):
+        x = np.load(f, allow_pickle=True).tolist()
+
+        # for each file: calculate observation time
+        t_start = 1e10
+        t_stop = 0.
+
+        if 'light' in str(f):
+            id_rejected.append([])
+
+        # loop through triggers
+        for i in range(1, len(x.keys()) + 1):
+            # light sample cleaning
+            if 'light' in str(f):
+                m = True
+                for c, v in light_cleaning_cuts.items():
+                    # print(i, v, {c.split()[0]: x[i][c]})
+                    m &= eval(v, {c.split()[0]: x[i][c]})
+
+                if not m:
+                    id_rejected[-1].append(i)
+                    continue
+
+            for name in feature_names:
+                if not name in result.keys():
+                    result[name] = []
+
+                result[name].append(x[i][name])
+
+            # save raw data
+            data['time'].append(x[i]['time'])
+            data['data'].append(x[i]['data'])
+
+            if 'intrinsic' in str(f) or 'extrinsic' in str(f):
+                if x[i]['end time in hrs'] > t_stop:
+                    t_stop = x[i]['end time in hrs']
+                if x[i]['start time in hrs'] < t_start:
+                    t_start = x[i]['start time in hrs']
+                result['type'].append(0)
+
+            if 'light' in str(f):
+                result['type'].append(1)
+
+        if 'intrinsic' in str(f):
+            t_tot_hrs += t_stop - t_start  # only add for dark count rate
+    for rej in id_rejected:
+        logging.info("Rejected {0:n} triggers in light file".format(len(rej)))
+    for k in ['time', 'data']:
+        data[k] = np.array(data[k])
+    # convert into into numpy arrays
+    for k, v in result.items():
+        if k == 'type':
+            dtype = np.bool
+        else:
+            dtype = np.float32
+        result[k] = np.array(v, dtype=dtype)
+
+    logging.info("In total, there are {0:n} light events and {1:n} background events"
+                 " for an observation time of {2:.2f} hours".format(result['type'].sum(),
+                                                                    np.invert(result['type']).sum(),
+                                                                    t_tot_hrs
+                                                                    ))
+    return result, data, t_tot_hrs

@@ -4,12 +4,12 @@ import iminuit as minuit
 import time
 import functools
 import logging
-from .analysis import build_trigger_windows
+from .processing import build_trigger_windows
 from scipy import optimize as op
 from collections import OrderedDict
 from copy import deepcopy
 from scipy.special import gammainc
-from .functions import TimeLine
+from .models import TimeLine
 
 pvalue = lambda dof, chisq: 1. - gammainc(.5 * dof, .5 * chisq)
 
