@@ -688,17 +688,26 @@ class MLHyperParTuning(object):
         """
         Plot the confusion matrix for each scorer
         """
-        if not path.exists():
+        if path is not None and not path.exists():
             path.mkdir(parents=True)
 
-        for score in scoring.keys():
+        if type(scoring) is list:
+            scorer_names = scoring
+        elif type(scoring) is dict:
+            scorer_names = scoring.keys()
+        else:
+            raise ValueError("type of scoring not understood")
+
+        for score in scorer_names:
             disp = ConfusionMatrixDisplay(np.array(results['confusion_matrix_test'][score]),
                                           display_labels=['bkg', 'light'])
             disp.plot(cmap=plt.cm.Blues,
                       values_format="d")
             plt.title(f"{classifier}" + f" {score} ")
-            plt.savefig(path / f"confusion_matrix_{score}_{classifier}.png", dpi=150)
-        plt.close("all")
+            if path is not None:
+                plt.savefig(path / f"confusion_matrix_{score}_{classifier}.png", dpi=150)
+        if path is not None:
+            plt.close("all")
 
     @staticmethod
     def plot_learning_curve(results, classifier="", select_score=None, path=PosixPath("../")):
@@ -710,15 +719,14 @@ class MLHyperParTuning(object):
         select_score: str
             name of score to compute learning curve for. If None, compute for all used scorers
         """
-        if not path.exists():
+        if not path is None and not path.exists():
             path.mkdir(parents=True)
 
-        for score, val in results['learning_curve'].items():
-            plt.figure()
-
+        for i, (score, val) in enumerate(results['learning_curve'].items()):
             if select_score is not None:
                 if not score == select_score:
                     continue
+            plt.figure()
 
             train_sizes, train_scores, valid_scores = val
 
@@ -728,6 +736,7 @@ class MLHyperParTuning(object):
                      ls='--',
                      color=plt.cm.tab10(0.),
                      )
+
             plt.fill_between(train_sizes,
                              train_scores.mean(axis=1) - np.sqrt(train_scores.var()),
                              y2=train_scores.mean(axis=1) + np.sqrt(train_scores.var()),
@@ -739,13 +748,13 @@ class MLHyperParTuning(object):
             plt.plot(train_sizes, valid_scores.mean(axis=1),
                      marker='o',
                      label=score + " valid", ls='-',
-                     color=plt.cm.tab10(0.),
+                     color=plt.cm.tab10(0.1),
                      )
             plt.fill_between(train_sizes,
                              valid_scores.mean(axis=1) - np.sqrt(valid_scores.var()),
                              y2=valid_scores.mean(axis=1) + np.sqrt(valid_scores.var()),
                              alpha=0.3,
-                             color=plt.cm.tab10(0.),
+                             color=plt.cm.tab10(0.1),
                              zorder=-1
                              )
 
@@ -753,8 +762,11 @@ class MLHyperParTuning(object):
             plt.grid()
             plt.xlabel("Sample Size")
             plt.ylabel("Score")
-            plt.savefig(path / f"learning_curve_{score}_{classifier}.png", dpi=150)
-        plt.close("all")
+            if path is not None:
+                plt.savefig(path / f"learning_curve_{score}_{classifier}.png", dpi=150)
+
+        if path is not None:
+            plt.close("all")
 
     @staticmethod
     def plot_parameter_profiles(results, scoring, classifier, path=PosixPath("../")):
@@ -765,7 +777,9 @@ class MLHyperParTuning(object):
                 path.mkdir(parents=True)
 
         for i, score in enumerate(scoring):
-            plt.figure(figsize=(4 * 3, 4))
+            n_par = len(results['profile']['mean_test'][score].keys())
+            plt.figure(figsize=(4 * n_par, 4))
+            ax_list = []
             for j, par in enumerate(results['profile']['mean_test'][score].keys()):
 
                 ax = plt.subplot(1, len(results['profile']['mean_test'][score].keys()), j + 1)
@@ -780,34 +794,39 @@ class MLHyperParTuning(object):
                 else:
                     x = np.unique(results['gs_cv'][f'param_{par}'].data).astype(np.float)
 
-                for t in ['test', 'train']:
+                for i_t, t in enumerate(['train', 'test']):
                     ax.plot(x, results['profile'][f'mean_{t:s}'][score][par],
-                            color=plt.cm.tab10(0.),
+                            color=plt.cm.tab10(0.1 * i_t),
                             ls='-' if t == 'test' else '--',
-                            label=score + " " + t
+                            label=t
                             )
 
-                    if t == 'test':
-                        ax.fill_between(x, results['profile'][f'mean_{t:s}'][score][par] -
-                                               0.5 * results['profile'][f'std_{t:s}'][score][par],
-                                        y2=results['profile'][f'mean_{t:s}'][score][par] +
-                                               0.5 * results['profile'][f'std_{t:s}'][score][par],
-                                        color=plt.cm.tab10(0.),
-                                        alpha=0.3)
+                    ax.fill_between(x, results['profile'][f'mean_{t:s}'][score][par] -
+                                           0.5 * results['profile'][f'std_{t:s}'][score][par],
+                                    y2=results['profile'][f'mean_{t:s}'][score][par] +
+                                           0.5 * results['profile'][f'std_{t:s}'][score][par],
+                                    color=plt.cm.tab10(0.1 * i_t),
+                                    alpha=0.3)
 
                 if not j:
-                    v = ax.get_ylim()
-                else:
+                    ax.set_ylabel(score)
                     ax.legend()
-                if j:
+                    vy = list(ax.get_ylim())
+                else:
                     ax.tick_params(labelleft=False)
-                    ax.set_ylim(v)
+                    v_now = ax.get_ylim()
+                    vy[0] = v_now[0] if v_now[0] < vy[0] else vy[0]
+                    vy[1] = v_now[1] if v_now[1] > vy[1] else vy[1]
+
+                ax_list.append(ax)
+                ax.grid()
                 ax.set_xlabel(par)
 
                 if par == 'alpha' and classifier == 'mlp':
                     ax.set_xscale('log')
 
-                ax.grid()
+                for a in ax_list:
+                    a.set_ylim(vy)
 
             plt.subplots_adjust(wspace=0.1)
             if path is not None:
@@ -842,6 +861,7 @@ class MLHyperParTuning(object):
 
         if not n_misid:
             print("No misidentified pulses found, returning.")
+            return
 
         plt.figure(figsize=(6 * 4, n_misid))
         iplot = 1

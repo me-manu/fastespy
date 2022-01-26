@@ -367,3 +367,96 @@ def plot_metric(history, ax=None, metric="loss", **kwargs):
     ax.set_xlabel('Epoch')
     ax.set_ylabel(metric)
     return ax
+
+def plot_performance_vs_threshold(thr, sig, bkg, eff,
+                                  d_sig=None,
+                                  d_bkg=None,
+                                  d_eff=None,
+                                  fig=None,
+                                  ax_sig=None,
+                                  ax_bkg=None,
+                                  ax_eff=None,
+                                  classifier_name=None,
+                                  **kwargs
+                                  ):
+    """
+    Plot the performance of classifiers in terms
+    of achieved significance, bkg rate, and signal efficiency
+    as a function of the signal threshold.
+
+    Parameters
+    ----------
+    thr: array-like
+        threshold values
+    sig: array-like
+        Significance values
+    bkg: array-like
+        background rate values
+    eff: array-like
+        signal efficiency values
+    d_sig: array-like
+        array of upper and lower errors on Significance
+    d_bkg: array-like
+        array of upper and lower errors on background rates
+    d_eff: array-like
+        array of upper and lower errors on significances
+    classifier_name: str or None
+        Name of used classifier
+    kwargs: dict
+        plotting kwargs
+
+    Returns
+    -------
+    matplotlib.axes instances and matplotlib.figure instance
+    """
+    if fig is None:
+        fig = plt.figure(figsize=(7, 8), dpi=110)
+
+    if ax_sig is None or ax_bkg is None or ax_eff is None:
+        ax_sig = fig.add_subplot(311)
+        ax_bkg = fig.add_subplot(312)
+        ax_eff = fig.add_subplot(313)
+
+    y = [sig, bkg, eff]
+    dy = [d_sig, d_bkg, d_eff]
+    for i, ax in enumerate([ax_sig, ax_bkg, ax_eff]):
+        if not i:
+            label = kwargs.pop('label', '')
+        else:
+            label = ''
+
+        ax.plot(thr, y[i],
+                label=label,
+                **kwargs
+                )
+
+        if dy[i] is not None:
+            ax.fill_between(thr, y[i] - dy[i],
+                            y2=y[i] + dy[i],
+                            color=kwargs.get('color', 'C0'),
+                            alpha=kwargs.get('alpha', 0.5))
+
+        ax.grid(True)
+        if i == 1:
+            ax.set_yscale("log")
+            ax.set_ylabel("Background rate (Hz)")
+        else:
+            vy = list(ax.get_ylim())
+            if vy[0] < 0:
+                vy[0] = 0.
+                ax.set_ylim(vy)
+
+        if not i == 2:
+            ax.tick_params(labelbottom=False, direction="in")
+            if not i:
+                ax.set_ylabel(r"Signficance ($\sigma$)")
+                ax.legend(loc=2)
+        else:
+            ax.set_xlabel("Threshold")
+            ax.set_ylabel("Efficiency")
+
+    fig.subplots_adjust(hspace=0.)
+    if classifier_name is not None:
+        fig.suptitle(classifier_name)
+
+    return fig, ax_sig, ax_bkg, ax_eff
