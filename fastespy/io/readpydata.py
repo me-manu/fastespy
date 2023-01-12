@@ -260,7 +260,7 @@ def convert_data_to_ML_format(result, features, bkg_type, signal_type):
     return X, y
 
 
-def load_data_rikhav(files, feature_names, light_cleaning_cuts={}):
+def load_data_rikhav(files, feature_names, light_cleaning_cuts={}, bkg_type='intrinsic'):
     """
     Load data from Rikhav's pulse fitting
 
@@ -274,6 +274,9 @@ def load_data_rikhav(files, feature_names, light_cleaning_cuts={}):
 
     light_cleaning_cuts: dict
         dictionary with feature names as key and cleaning options to be used
+
+    bkg_type: str
+        name of background type of file
 
     Returns
     -------
@@ -291,7 +294,11 @@ def load_data_rikhav(files, feature_names, light_cleaning_cuts={}):
     logging.info("Reading data")
 
     for f in tqdm.tqdm(files):
-        x = np.load(f, allow_pickle=True).tolist()
+        if "light" in str(f) or bkg_type in str(f):
+            x = np.load(f, allow_pickle=True).tolist()
+        else:
+            logging.info(f"Skipping {f}")
+            continue
 
         # for each file: calculate observation time
         t_start = 1e10
@@ -323,7 +330,7 @@ def load_data_rikhav(files, feature_names, light_cleaning_cuts={}):
             data['time'].append(x[i]['time'])
             data['data'].append(x[i]['data'])
 
-            if 'intrinsic' in str(f) or 'extrinsic' in str(f):
+            if bkg_type in str(f):
                 if x[i]['end time in hrs'] > t_stop:
                     t_stop = x[i]['end time in hrs']
                 if x[i]['start time in hrs'] < t_start:
@@ -333,7 +340,7 @@ def load_data_rikhav(files, feature_names, light_cleaning_cuts={}):
             if 'light' in str(f):
                 result['type'].append(1)
 
-        if 'intrinsic' in str(f):
+        if bkg_type in str(f):
             t_tot_hrs += t_stop - t_start  # only add for dark count rate
     for rej in id_rejected:
         logging.info("Rejected {0:n} triggers in light file".format(len(rej)))

@@ -2,9 +2,6 @@ from __future__ import absolute_import, division, print_function
 from scipy import signal
 from scipy.special import gammaln
 import numpy as np
-import logging
-import sys
-
 
 
 def opt_bins(data, maxM=100):
@@ -91,6 +88,7 @@ def hist_norm(v, bins = None):
     vc = 0.5 * (bins[1:] + bins[:-1])
     return n,vc,bins,v.mean(), v.var()
 
+
 def derivative(v):
     """
     Compute derivative of finite series
@@ -104,6 +102,25 @@ def derivative(v):
     dv = np.insert(dv, 0, v[1] - v[0])
     dv = np.append(dv, v[-1] - v[-2])
     return dv
+
+
+def sample_derivative(X):
+    """
+    Compute derivative for each sample of a finite series
+
+    Parameters
+    ----------
+    X: array-like
+        sample of time series with dimension n_samples x n_time_series_points
+
+    Returns
+    -------
+    dX: derivative of each time series in sample
+    """
+    dX = 0.5 * (X[:, 2:] - X[:, :-2])
+    dX = np.insert(dX, 0, X[:, 1] - X[:, 0], axis=1)
+    dX = np.insert(dX, -1, X[:, -1] - X[:, -2], axis=1)
+    return dX
 
 def filter(x, fSample, fmax = 1.e6, norder = 3):
 

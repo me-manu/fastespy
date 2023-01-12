@@ -2,13 +2,14 @@ from __future__ import absolute_import, division, print_function
 from tensorflow import keras
 import tensorflow as tf
 from .models import train_model
-import matplotlib.pyplot as plt
+from ..mlscikit.hyperpartune import get_sig_bkg_rate_eff
 import numpy as np
 import tempfile
 import os
 from sklearn.model_selection import KFold, StratifiedKFold
 
-def plot_sig_vs_thr(model, X, y_true, t_obs_hours, N_tot, step=0.0001):
+
+def get_sig_vs_thr_keras(model, X, y_true, t_obs_hours, N_tot, step=0.0001):
     """
     Plot the significance as function of class label threshold
 
@@ -33,6 +34,7 @@ def plot_sig_vs_thr(model, X, y_true, t_obs_hours, N_tot, step=0.0001):
     significance array, bkg rate array, and efficiency array
     """
     y_pred = model.predict(X)
+    print(y_pred.shape)
 
     threshold = np.arange(step, 1., step)
     significance = np.zeros_like(threshold)
@@ -49,37 +51,10 @@ def plot_sig_vs_thr(model, X, y_true, t_obs_hours, N_tot, step=0.0001):
 
     imax = np.argmax(significance)
     print(f"Max significance: {significance[imax]:.2f} for threshold {threshold[imax]:.4f}"
+          f" for observation time of {t_obs_hours:.2f} hours,"
           f" background rate {bkg_rate[imax]:.2e} and analysis efficiency {eff[imax]:.2f}")
 
-    ax = plt.subplot(311)
-    ax.plot(threshold, significance)
-    ax.set_ylabel("Significance ($\sigma$)")
-    ax.tick_params(labelbottom=False, direction="in")
-    ax.grid()
-    ax.axvline(threshold[imax], color='k', ls='--', zorder=-1)
-
-
-
-    ax = plt.subplot(312)
-    ax.plot(threshold, bkg_rate)
-    ax.set_yscale("log")
-    ax.set_ylabel("Bkg rate (Hz)")
-    ax.tick_params(labelbottom=False, direction="in")
-    ax.grid()
-    ax.set_ylim(5e-6, ax.get_ylim()[1])
-    ax.axvline(threshold[imax], color='k', ls='--', zorder=-1)
-
-    ax = plt.subplot(313)
-    ax.plot(threshold, eff)
-    # ax.set_yscale("log")
-    ax.set_ylabel("Efficiency")
-    ax.tick_params(direction="in")
-    ax.grid()
-    ax.axvline(threshold[imax], color='k', ls='--', zorder=-1)
-
-    ax.set_xlabel("Threshold")
-
-    return ax, threshold, significance, bkg_rate, eff
+    return threshold, significance, bkg_rate, eff
 
 
 class SplitData(object):
@@ -243,15 +218,27 @@ class SignificanceMetric(keras.metrics.Metric):
     """Class to evaluate significance of signal in LSW experiment"""
 
     def __init__(self, name='significance',
-                 N_tot=1000.,
+                 N_bkg_trigger=1000.,
                  e_d=0.5,
                  n_s=2.8e-5,
                  t_obs=20. * 24. * 3600.,
                  thr=0.5,
                  **kwargs):
+        """
+
+        Parameters
+        ----------
+        name
+        N_bkg_trigger
+        e_d
+        n_s
+        t_obs
+        thr
+        kwargs
+        """
         super(SignificanceMetric, self).__init__(name=name, **kwargs)
 
-        self._N_tot = tf.cast(N_tot, self.dtype)
+        self._N_bkg_trigger = tf.cast(N_bkg_trigger, self.dtype)
         self._e_d = tf.cast(e_d, self.dtype)
         self._n_s = tf.cast(n_s, self.dtype)
         self._t_obs = tf.cast(t_obs, self.dtype)
@@ -260,6 +247,7 @@ class SignificanceMetric(keras.metrics.Metric):
         self.significance = self.add_weight(name='significance', initializer='zeros')
         self._n_samples = tf.Variable(0., name='current_sample_size', dtype=self.dtype)
         self._n_true_samples = tf.Variable(0., name='current_number_true_samples', dtype=self.dtype)
+        self._n_bkg_samples = tf.Variable(0., name='current_number_bkg_samples', dtype=self.dtype)
         self._tp_tot = tf.Variable(0., name='tp_total', dtype=self.dtype)
         self._fp_tot = tf.Variable(0., name='fp_total', dtype=self.dtype)
 
@@ -271,6 +259,7 @@ class SignificanceMetric(keras.metrics.Metric):
         batch_size = tf.cast(tf.shape(y_true)[0], self.dtype)
         self._n_samples.assign_add(batch_size)
         self._n_true_samples.assign_add(tf.reduce_sum(tf.cast(y_true, self.dtype)))
+        self._n_bkg_samples.assign_add(tf.reduce_sum(tf.cast(tf.logical_not(y_true), self.dtype)))
 
         # calculate efficiency, i.e., the number of true positives over all positives
         tp = tf.logical_and(tf.equal(y_true, True), tf.equal(y_pred, True))
@@ -282,10 +271,11 @@ class SignificanceMetric(keras.metrics.Metric):
         fp = tf.logical_and(tf.equal(y_true, False), tf.equal(y_pred, True))
         fp = tf.reduce_sum(tf.cast(fp, self.dtype))
         self._fp_tot.assign_add(fp)
-        fp_rate = self._fp_tot / self._n_samples
+        #fp_rate = self._fp_tot / self._n_samples
+        fp_rate = self._fp_tot / self._n_bkg_samples
 
         # bkg rate: false positive rate times total number of triggers over obs time
-        n_b = fp_rate * self._N_tot / self._t_obs
+        n_b = fp_rate * self._N_bkg_trigger / self._t_obs
 
         # significance
         sig = 2. * (tf.sqrt(n_b + self._e_d * efficiency * self._n_s) - tf.sqrt(n_b)) * tf.sqrt(self._t_obs)
@@ -302,6 +292,7 @@ class SignificanceMetric(keras.metrics.Metric):
         self._tp_tot.assign(0.)
         self._n_samples.assign(0.)
         self._n_true_samples.assign(0.)
+        self._n_bkg_samples.assign(0.)
 
 
 def learning_curve(model, X, y,
@@ -396,3 +387,85 @@ def learning_curve(model, X, y,
         model.load_weights(weights)
 
     return sample_sizes, results_train, results_test
+
+def calc_cam_binary_classification_utl(model, X, y):
+    """
+    Compute the class activation map for binary classification
+    of a univariate time line from a trained model.
+
+    The last layer of the model needs to be a single node
+    for binary classification. The next to last layer needs
+    to be global average pooling.
+
+    Parameters
+    ----------
+    model
+    X
+    y
+
+    Returns
+    -------
+
+    Notes
+    -----
+    Adapted from viz_cam function in
+    https://github.com/hfawaz/dl-4-tsc/blob/master/utils/utils.py
+    """
+    # filters
+
+    # weights from the GAP output layer to the binary classification node
+    w_k_c = model.layers[-1].get_weights()[0]
+
+    # define a function to calculate a fast forward pass
+    # the same input
+    new_input_layer = model.inputs
+    # output is both the original as well as the before last layer
+    # i.e. the last output before GAP and the final model prediction
+    new_output_layer = [model.layers[-3].output, model.layers[-1].output]
+    new_feed_forward = keras.backend.function(new_input_layer, new_output_layer)
+
+    # get the output of convolution and predicted label
+    # for each sample
+    [conv_out, predicted] = new_feed_forward(X)
+
+    # compute the CAM as dot product for the one class present
+    # TODO this needs to be modified if more than one class present
+    # has shape (n_samples, n_time_points)
+
+    # only one class trained
+    if w_k_c.shape[1] == 1:
+
+        pred_class_label = np.zeros(y.size, dtype=bool)
+        pred_class_label[predicted[:,0] > 0.5] = True
+        m = pred_class_label & y
+
+        cam = np.dot(conv_out[m], w_k_c[:, 0])
+
+        # normalize cam between 0 and 1
+        cam = (cam.T - cam.min(axis=-1)).T
+        cam = (cam.T / cam.max(axis=-1)).T
+        cam = [cam]
+
+    # loop through classes
+    else:
+        cam = []
+        # get the index of the predicted class
+        pred_class_label = np.argmax(predicted, axis=1)
+        # get the index of the true class label
+        true_class_label = np.argmax(y, axis=1)
+        # build mask to use only those samples
+        # that have been correctly classified
+        mask = np.equal(true_class_label, pred_class_label)
+        # compute the cam for each class
+        classes = np.unique(y)
+        for i, c in enumerate(classes):
+            # build mask for correctly classified && belonging to class c
+            m = (c == true_class_label) & mask
+
+            # compute cam for this class
+            cam.append(np.dot(conv_out[m], w_k_c[:, i]))
+
+            # normalize cam between 0 and 1
+            cam[i] = (cam[i].T - cam[i].min(axis=-1)).T
+            cam[i] = (cam[i].T / cam[i].max(axis=-1)).T
+    return cam

@@ -4,7 +4,7 @@ Adapted from https://github.com/mxmeier/feldman_cousins/
 
 from __future__ import division, print_function
 import warnings
-from collections import Iterable
+from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor, wait
 import numpy as np
 import scipy.stats as scs

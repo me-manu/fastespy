@@ -137,6 +137,16 @@ def get_tp_fp_fn(y_true, y_pred, thr=0.5):
     -------
     Tuple with predicted class labels, true positives, false positives, and false negatives
     """
+    # check if y_pred has shape with two labels or one label,
+    # we need the latter
+    if len(y_pred.shape) > 1:
+        if y_pred.shape[1] > 2:  # more than two classes trained, can't deal with this
+            raise ValueError("More than two classes trained, not implemented")
+        elif y_pred.shape[1] == 2:
+            y_pred = y_pred[:, 1]  # this should be the prob to belonging to light class
+        elif y_pred.shape[1] == 1:
+            y_pred = np.squeeze(y_pred)
+
     class_pred = (y_pred > thr).flatten().astype(int)
     tp = (class_pred == 1) & (y_true == 1)
     fp = (class_pred == 1) & (y_true == 0)
@@ -167,7 +177,8 @@ def get_sig_bkg_rate_eff(y_true, y_pred, N_tot, t_obs, thr=0.5):
     class_pred, tp, fp, fn = get_tp_fp_fn(y_true, y_pred, thr=thr)
 
     sig = significance_scorer(y_true, class_pred, t_obs=t_obs, N_tot=N_tot)
-    bkg_rate = fp.sum() / y_true.size * N_tot / t_obs
+    #bkg_rate = fp.sum() / y_true.size * N_tot / t_obs
+    bkg_rate = fp.sum() / np.sum(~y_true.astype(bool)) * N_tot / t_obs
     eff = tp.sum() / y_true.sum()
 
     return sig, bkg_rate, eff
@@ -223,11 +234,14 @@ def significance_scorer(y, y_pred,
 
     # misidentified background events
     # false positive rate
-    fp_rate = np.sum((y_pred == 1) & (y == 0)) / float(len(y))
+    #fp_rate = np.sum((y_pred == 1) & (y == 0)) / float(len(y))
+    fp_rate = np.sum((y_pred == 1) & (y == 0)) / np.sum(~y.astype(bool))
     # from this, you get the dark current
     n_b = fp_rate * N_tot / t_obs
 
     S = 2. * (np.sqrt(e_d * tp_rate * n_s + n_b) - np.sqrt(n_b)) * np.sqrt(t_obs)
+    if np.isnan(S):
+        raise ValueError("Significance is NaN")
     return S
 
 
@@ -330,6 +344,7 @@ class MLHyperParTuning(object):
         self._prob_test = None
         self._prob_train = None
         self._t_obs = None
+        self._N_tot = None
 
     def scale_data(self):
         """preprocess data: zero mean, standard deviation of 1"""
@@ -386,6 +401,10 @@ class MLHyperParTuning(object):
         return self._t_obs
 
     @property
+    def N_tot(self):
+        return self._N_tot
+
+    @property
     def kf(self):
         return self._kf
 
@@ -418,13 +437,16 @@ class MLHyperParTuning(object):
         self._X_train = pca.transform(self._X_train)
         self._X_test = pca.transform(self._X_test)
 
-    def make_sig_scorer(self, t_obs):
+    def make_sig_scorer(self, t_obs, N_tot):
         """Make a scorer for the significance given some observation time in seconds"""
         self._t_obs = t_obs
+        self._N_tot = N_tot
         self._sig_score = make_scorer(significance_scorer,
                                       greater_is_better=True,
                                       t_obs=t_obs,
-                                      N_tot=self._y_test.size + self._y_train.size)
+                                      #N_tot=self._y_test.size + self._y_train.size
+                                      N_tot=N_tot
+                                      )
 
     def perform_grid_search(self, classifier,
                             default_pars,
@@ -629,7 +651,7 @@ class MLHyperParTuning(object):
                     sig[j], bkg[j], eff[j] = get_sig_bkg_rate_eff(self._y_test if i else self._y_train,
                                                                   self._prob_test[k][:, 1] if i else
                                                                       self._prob_train[k][:, 1],
-                                                                  self._y_train.size + self._y_test.size,
+                                                                  self._N_tot,
                                                                   self._t_obs, thr_j)
 
                 if i:
@@ -637,7 +659,8 @@ class MLHyperParTuning(object):
                 else:
                     self._results['thr_sig_bkg_eff_train'][k] = (sig, bkg, eff)
 
-            train_sizes, train_scores, valid_scores = learning_curve(best_clf, self._X_train, self._y_train,
+            train_sizes, train_scores, valid_scores = learning_curve(best_clf, self._X_train,
+                                                                     self._y_train,
                                                                      train_sizes=train_sizes,
                                                                      cv=self._kf,
                                                                      verbose=1,
@@ -647,11 +670,14 @@ class MLHyperParTuning(object):
             self._results['learning_curve'][k] = (train_sizes, train_scores, valid_scores)
 
             # get the confusion matrix for the best classifier
-            self._results['confusion_matrix_test'][k] = confusion_matrix(self._y_test, self._y_pred_test[k])
-            self._results['confusion_matrix_train'][k] = confusion_matrix(self._y_train, self._y_pred_train[k])
+            self._results['confusion_matrix_test'][k] = confusion_matrix(self._y_test,
+                                                                         self._y_pred_test[k])
+            self._results['confusion_matrix_train'][k] = confusion_matrix(self._y_train,
+                                                                          self._y_pred_train[k])
 
             # get the classification report for the best classifier
-            self._results['classification_report'][k] = classification_report(self._y_test, self._y_pred_test[k],
+            self._results['classification_report'][k] = classification_report(self._y_test,
+                                                                              self._y_pred_test[k],
                                                                               output_dict=True,
                                                                               labels=[0, 1],
                                                                               target_names=['bkg', 'light']
@@ -661,20 +687,23 @@ class MLHyperParTuning(object):
             self._results['bkg_pred_train'][k], self._results['tp_efficiency_train'][k] = \
                 self.compute_bkg_rate_tp_efficiency(self._results['confusion_matrix_train'][k],
                                                     y=self._y_train,
-                                                    n_triggers=self._y_test.size + self._y_train.size
+                                                    #n_triggers=self._y_test.size + self._y_train.size
+                                                    n_triggers=self._N_tot
                                                     )
 
             self._results['bkg_pred_test'][k], self._results['tp_efficiency_test'][k] = \
                 self.compute_bkg_rate_tp_efficiency(self._results['confusion_matrix_test'][k],
                                                     y=self._y_test,
-                                                    n_triggers=self._y_test.size + self._y_train.size
+                                                    #n_triggers=self._y_test.size + self._y_train.size
+                                                    n_triggers=self._N_tot
                                                     )
 
     @staticmethod
     def compute_bkg_rate_tp_efficiency(confusion_matrix, y, n_triggers):
         # compute the background rate for test and train sample
         fp = confusion_matrix[0, 1]  # false positive
-        fp_rate = fp / y.size  # false positive rate
+        #fp_rate = fp / y.size  # false positive rate
+        fp_rate = fp / (y == 0).sum()  # false positive rate
         bkg_rate = fp_rate * n_triggers
 
         # efficiency of identifying light
@@ -950,6 +979,7 @@ def run_hyper_par_opt(X, y,
                       param_grid,
                       default_pars={},
                       t_tot_hrs=500.,
+                      N_bkg_trigger=1000,
                       data=None,
                       kfolds=5,
                       classifier_name="clf",
@@ -981,6 +1011,8 @@ def run_hyper_par_opt(X, y,
         dictionary with default parameters for the classifier
     t_tot_hrs: float
         total number of hours of data taking
+    N_bkg_trigger: int
+        total number of background triggers taken during t_tot_hrs
     data: dict
         dict with raw data (to plot the misidentified time lines)
     kfolds: int
@@ -1010,7 +1042,7 @@ def run_hyper_par_opt(X, y,
         logging.info("Transforming data using PCA")
         ml_tune.transform_data_pca()
 
-    ml_tune.make_sig_scorer(t_obs=t_tot_hrs * 3600.)
+    ml_tune.make_sig_scorer(t_obs=t_tot_hrs * 3600., N_tot=N_bkg_trigger)
     ml_tune.perform_grid_search(classifier=classifier,
                                 default_pars=default_pars,
                                 param_grid=param_grid,
@@ -1069,6 +1101,7 @@ def run_hyper_par_opt_all_folds(X, y,
                                 param_grid,
                                 default_pars={},
                                 t_tot_hrs=500.,
+                                N_bkg_trigger=1000,
                                 data=None,
                                 kfolds=5,
                                 classifier_name="clf",
@@ -1096,6 +1129,8 @@ def run_hyper_par_opt_all_folds(X, y,
         dictionary with parameters for the grid search
     t_tot_hrs: float
         total number of hours of data taking
+    N_bkg_trigger: int
+        total number of background triggers taken during t_tot_hrs
     data: dict
         dict with raw data (to plot the misidentified time lines)
     kfolds: int
@@ -1137,6 +1172,7 @@ def run_hyper_par_opt_all_folds(X, y,
                                     param_grid=param_grid,
                                     default_pars=default_pars,
                                     t_tot_hrs=t_tot_hrs,
+                                    N_bkg_trigger=N_bkg_trigger,
                                     data=data,
                                     kfolds=kfolds,
                                     classifier_name=classifier_name,

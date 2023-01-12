@@ -29,6 +29,7 @@ if __name__ == "__main__":
     parser.add_argument('--use-pca', action="store_true",
                         help='Transform data using PCA',
                         )
+    parser.add_argument('--bkg-type', help='Bkg type', default="intrinsic")
     parser.add_argument('-k', '--kfolds', required=False, help='The number of k folds for cross validation',
                         type=int, default=5)
 
@@ -68,7 +69,11 @@ if __name__ == "__main__":
     logging.info("Using cleaning cuts {}".format(light_cleaning_cuts))
 
     # read the data
-    result, data, t_tot_hrs = load_data_rikhav(files, feature_names, light_cleaning_cuts=light_cleaning_cuts)
+    result, data, t_tot_hrs = load_data_rikhav(files,
+                                               feature_names,
+                                               bkg_type=args.bkg_type,
+                                               light_cleaning_cuts=light_cleaning_cuts,
+                                               )
 
     # convert data to ML format
     X, y = convert_data_to_ML_format(result,
@@ -91,6 +96,7 @@ if __name__ == "__main__":
                                              default_pars=default_pars,
                                              param_grid=param_grid,
                                              t_tot_hrs=t_tot_hrs,
+                                             N_bkg_trigger=np.sum(~y.astype(bool)),
                                              data=data,
                                              kfolds=args.kfolds,
                                              classifier_name=args.classifier,

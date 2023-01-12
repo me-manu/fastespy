@@ -8,8 +8,10 @@ from matplotlib import pyplot as plt
 matplotlib.use("agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib import collections
 from matplotlib.ticker import MultipleLocator
 from matplotlib.colors import ListedColormap
+from collections.abc import Iterable
 
 
 def new_cmap(cmap_name, step=25, cmin=0., cmax=0.7):
@@ -336,11 +338,11 @@ def plot_scatter_w_hist(x,y,
 def plot_metric(history, ax=None, metric="loss", **kwargs):
     """
     Plot the evolution of a classification metric
-    with epocks
+    with epochs from keras optimization
 
     Parameters
     ----------
-    history: keras history object
+    history: keras history object or dict
         the classification history
 
     ax: matplotlib axes object
@@ -360,10 +362,18 @@ def plot_metric(history, ax=None, metric="loss", **kwargs):
         ax = plt.gca()
 
     label = kwargs.pop('label', '')
-    ax.semilogy(history.epoch, history.history[metric], label='Train ' + label, **kwargs)
-
+    if not isinstance(history, dict):
+        ax.semilogy(history.epoch, history.history[metric], label='Train ' + label, **kwargs)
+    else:
+        ax.semilogy(range(len(history[f'val_{metric}'])),
+                    history[metric], label='Train ' + label, **kwargs)
     kwargs.pop('ls', None)
-    ax.semilogy(history.epoch, history.history[f'val_{metric}'], label='Val ' + label, ls='--', **kwargs)
+    if not isinstance(history, dict):
+        ax.semilogy(history.epoch, history.history[f'val_{metric}'], label='Val ' + label, ls='--', **kwargs)
+    else:
+        ax.semilogy(range(len(history[f'val_{metric}'])),
+                    history[f'val_{metric}'], label='Val ' + label, ls='--', **kwargs)
+
     ax.set_xlabel('Epoch')
     ax.set_ylabel(metric)
     return ax
@@ -377,6 +387,9 @@ def plot_performance_vs_threshold(thr, sig, bkg, eff,
                                   ax_bkg=None,
                                   ax_eff=None,
                                   classifier_name=None,
+                                  t_tot_hours=None,
+                                  rescale_t_obs_days=None,
+                                  draw_legend=True,
                                   **kwargs
                                   ):
     """
@@ -402,6 +415,11 @@ def plot_performance_vs_threshold(thr, sig, bkg, eff,
         array of upper and lower errors on significances
     classifier_name: str or None
         Name of used classifier
+    t_tot_hours: float or None
+        observation time in hours
+    rescale_t_obs_days: float or None
+        if not None and t_tot_hours is given, rescale significance to this observation time
+        through significance * sqrt(rescale_t_obs_days / (t_tot_hours / 24.))
     kwargs: dict
         plotting kwargs
 
@@ -417,8 +435,20 @@ def plot_performance_vs_threshold(thr, sig, bkg, eff,
         ax_bkg = fig.add_subplot(312)
         ax_eff = fig.add_subplot(313)
 
+    # rescale significance to observation time
+    if t_tot_hours is not None:
+        t_obs = t_tot_hours / 24.
+        if rescale_t_obs_days is not None:
+            sig *= np.sqrt(rescale_t_obs_days / t_obs)
+            if d_sig is not None:
+                d_sig *= np.sqrt(rescale_t_obs_days / t_obs)
+            t_obs = rescale_t_obs_days
+    else:
+        t_obs = None
+
     y = [sig, bkg, eff]
     dy = [d_sig, d_bkg, d_eff]
+
     for i, ax in enumerate([ax_sig, ax_bkg, ax_eff]):
         if not i:
             label = kwargs.pop('label', '')
@@ -434,7 +464,7 @@ def plot_performance_vs_threshold(thr, sig, bkg, eff,
             ax.fill_between(thr, y[i] - dy[i],
                             y2=y[i] + dy[i],
                             color=kwargs.get('color', 'C0'),
-                            alpha=kwargs.get('alpha', 0.5))
+                            alpha=kwargs.get('alpha', 0.2))
 
         ax.grid(True)
         if i == 1:
@@ -448,15 +478,181 @@ def plot_performance_vs_threshold(thr, sig, bkg, eff,
 
         if not i == 2:
             ax.tick_params(labelbottom=False, direction="in")
-            if not i:
-                ax.set_ylabel(r"Signficance ($\sigma$)")
-                ax.legend(loc=2)
+            if draw_legend:
+                if not i:
+                    ax.set_ylabel(r"Signficance ($\sigma$)")
+                    if t_obs is not None:
+                        title = f"$T_\mathrm{{obs}} = {t_obs:.1f}$ days"
+                        if rescale_t_obs_days is not None:
+                            title += "(rescaled)"
+                    else:
+                        title = ""
+                    ax.legend(loc=2, title=title)
         else:
             ax.set_xlabel("Threshold")
             ax.set_ylabel("Efficiency")
+
+        #ax.axvline(0.95, color="0.75", ls='--', zorder=-1)
 
     fig.subplots_adjust(hspace=0.)
     if classifier_name is not None:
         fig.suptitle(classifier_name)
 
     return fig, ax_sig, ax_bkg, ax_eff
+
+
+def colorline(x, y,
+              z=None,
+              cmap=plt.get_cmap('copper'),
+              norm=plt.Normalize(0.0, 1.0),
+              linewidth=3, alpha=1.0, ax=None):
+    """
+    http://nbviewer.ipython.org/github/dpsanders/matplotlib-examples/blob/master/colorline.ipynb
+    http://matplotlib.org/examples/pylab_examples/multicolored_line.html
+    Plot a colored line with coordinates x and y
+    Optionally specify colors in the array z
+    Optionally specify a colormap, a norm function and a line width
+    """
+
+    # Default colors equally spaced on [0,1]:
+    if z is None:
+        z = np.linspace(0.0, 1.0, len(x))
+
+    # Special case if a single number:
+    if not isinstance(z, Iterable):
+        z = np.array([z])
+
+    z = np.asarray(z)
+
+    segments = make_segments(x, y)
+    lc = collections.LineCollection(segments, array=z, cmap=cmap, norm=norm,
+                                    linewidth=linewidth, alpha=alpha)
+
+    if ax is None:
+        ax = plt.gca()
+
+    ax.add_collection(lc)
+    return lc
+
+
+def make_segments(x, y):
+    """
+    Create list of line segments from x and y coordinates, in the correct format
+    for LineCollection: an array of the form numlines x (points per line) x 2 (x
+    and y) array
+    """
+    points = np.array([x, y]).T.reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+    return segments
+
+
+def plot_cam_timeline(X, mask, cam,
+                      fig=None,
+                      time_series_axis=0,
+                      cmap='coolwarm',
+                      n_samples=15):
+    """
+    Plot timelines colored wtih class activation map
+
+    Parameters
+    ----------
+    X: array-like
+        input time lines
+    mask: array-like
+        mask for events where the predicted class == true class
+    cam: array-like
+        the class activation map
+    cmap: str or matplotlib colormap
+        the colormap for the class activation
+    time_series_axis: int
+        which time series is plotted (for multivariate time series)
+    fig: matplotlib.figure instance
+        the figure
+    n_samples: int
+        number of time lines to plot (randomly drawn)
+
+    Returns
+    -------
+    matplotlib figure instance
+
+    """
+
+    if fig is None:
+        fig = plt.figure(figsize=(6, 8))
+
+    # random sub samples
+    idx = np.random.choice(range(np.sum(mask)), size=n_samples, replace=False)
+
+    for i_idx, i in enumerate(idx):
+        y_shift = i_idx * -3
+        x_shift = i_idx * -5
+        plt.scatter(x=np.arange(X.shape[1]) + x_shift,
+                    y=X[mask][i, :, time_series_axis] + y_shift,
+                    c=cam[i],
+                    cmap=cmap, marker='o', s=5, vmin=0, vmax=1,
+                    linewidths=0.)
+        colorline(x=np.arange(X.shape[1]) + x_shift,
+                  y=X[mask][i, :, time_series_axis] + y_shift,
+                  z=cam[i],
+                  cmap=cmap, linewidth=1
+                  )
+
+    plt.colorbar(label="CAM$(t)$")
+    plt.ylabel("Output Voltage (a.u.)")
+    plt.xlabel("Sample")
+    plt.tight_layout()
+    return fig
+
+
+def plot_misided_timelines(model, X, y_true, ax=None, fig=None, time_series_axis = 0):
+    """
+    Plot misidentified time lines
+
+    Parameters
+    ----------
+    model: tensorflow.keras.model
+        The trained model
+    X: array-like
+        The time lines
+    y_true: array-like
+        True labels
+    ax: matplotlib.axes object or None
+    fig: matplotlib.figure object or None
+    time_series_axis: int
+        which time series is plotted (for multivariate time series)
+
+    Returns
+    -------
+    fig and ax objects
+    """
+
+    if fig is None:
+        fig = plt.figure(figsize=(6,8), dpi=150)
+    if ax is None:
+        ax = fig.add_subplot(111)
+
+    # get predicted labels
+    pred = model.predict(X)
+    pred_idx = np.argmax(pred, axis=1)
+
+    # get tp and fp
+    m_fp = ~y_true & pred_idx.astype(bool)
+    m_tp = y_true & pred_idx.astype(bool)
+
+    mean_tp = X[m_tp][..., time_series_axis].mean(axis=0)  # mean pulse for correctly id:ed pulses
+
+    # loop through misidentified pulses
+    if m_fp.sum() == 0:
+        return None, None
+
+    for i in range(m_fp.sum()):
+        shift_y = -2 * i
+        ax.plot(range(X.shape[1]), X[m_fp][i, :, time_series_axis] + shift_y,
+                label="$\hat{{y}} = {0:.3f}$".format(pred[m_fp][i, 1]))
+        ax.plot(range(X.shape[1]), mean_tp + shift_y, color='0.8', ls='--', zorder=-1)
+    ax.legend(loc=4, fontsize='x-small', ncol=2)
+    ax.set_xlabel("Sample")
+    ax.set_ylabel("Voltage (mV)")
+    fig.tight_layout()
+    return fig, ax
+

@@ -6,7 +6,7 @@ import functools
 import logging
 from .processing import build_trigger_windows
 from scipy import optimize as op
-from collections import OrderedDict
+from collections.abc import OrderedDict
 from copy import deepcopy
 from scipy.special import gammainc
 from .models import TimeLine

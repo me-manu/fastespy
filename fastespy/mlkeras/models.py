@@ -16,6 +16,45 @@ metrics = (
 )
 
 
+def time_series_z_normalization(X, invert=False, subtract_min=False, axis=None):
+    """
+    Perform z normalization of time series, i.e.,
+    for each sample series, subtract the mean and divide
+    by variance
+
+    Parameters
+    ----------
+    X: array-like
+        time series data in the shape `(n_samples, n_data_points)`
+
+    invert: bool
+        if True, invert time series by multiplying with -1
+
+    subtract_min: bool
+        if True, subtract the minimum, so that all samples are positive in the end
+
+    axis: int or None
+        Axis for the time series data
+
+
+    Returns
+    -------
+    Z normalized time series data
+    """
+    if invert:
+        X *= -1
+    mean_ = X.mean(axis=axis, keepdims=True)
+    std_ = X.std(axis=axis, keepdims=True)
+    z_norm = (X - mean_) / std_
+
+    if subtract_min:
+        minimum = z_norm.min(axis=axis, keepdims=True)
+        z_norm -= minimum
+
+    return z_norm
+
+
+
 def make_mlp_model(n_features,
                    metrics=metrics,
                    activation='relu',
